@@ -1,0 +1,2694 @@
+-- by r3cup
+
+task.spawn(function()
+    _G.ForsakenPlus_CustomRailLoaded = true
+    workspace:SetAttribute("FPlus_RailMod", true)
+
+    local HttpService = game:GetService("HttpService")
+    local SoundService = game:GetService("SoundService")
+    local RunService = game:GetService("RunService")
+    local TweenService = game:GetService("TweenService")
+    local Players = game:GetService("Players")
+    local Debris = game:GetService("Debris")
+    local CoreGui = game:GetService("CoreGui")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local LocalPlayer = Players.LocalPlayer
+
+    local listfiles = listfiles or list_files
+    local isfolder = isfolder or is_folder
+    local isfile = isfile or is_file
+    local makefolder = makefolder or make_folder
+    local readfile = readfile or read_file
+    local getgc = getgc or get_gc
+
+    -- [ Directories ]
+    local BASE_ROOT = "NaikoScript/ForsakenPlus"
+    local MUSIC_DIR = BASE_ROOT .. "/Music"
+    local CHASE_DIR = MUSIC_DIR .. "/Custom Chase - Killer"
+    local LMS_DIR   = MUSIC_DIR .. "/Custom LMS"
+    local SURV_DIR  = LMS_DIR .. "/Survivor"
+    local KILL_DIR  = LMS_DIR .. "/Killer"
+
+    local function SafeMakeFolder(path)
+        if not isfolder or not makefolder then return end
+        pcall(function()
+            if not isfolder(path) and not isfolder(path:gsub("/", "\\")) then
+                makefolder(path)
+            end
+        end)
+    end
+
+    SafeMakeFolder("NaikoScript")
+    SafeMakeFolder("NaikoScript/ForsakenPlus")
+    SafeMakeFolder("NaikoScript/ForsakenPlus/Music")
+    SafeMakeFolder("NaikoScript/ForsakenPlus/Music/Custom Chase - Killer")
+    SafeMakeFolder("NaikoScript/ForsakenPlus/Music/Custom LMS")
+    SafeMakeFolder("NaikoScript/ForsakenPlus/Music/Custom LMS/Survivor")
+    SafeMakeFolder("NaikoScript/ForsakenPlus/Music/Custom LMS/Killer")
+
+    -- [ Audio Mute Bus: Глушит нативные звуки, разрешая глушить эмбиент карты ]
+    local MuteBus = Instance.new("SoundGroup")
+    MuteBus.Name = "FPlus_MuteBus"
+    MuteBus.Volume = 0
+    MuteBus.Parent = SoundService
+
+    local SuppressedSounds = {}
+
+    local function SuppressAudio(snd)
+        if not snd or not snd:IsA("Sound") or snd.Name:find("Custom_") then return end
+        local nameLow = snd.Name:lower()
+        if nameLow:find("lobby") then return end
+
+        if not SuppressedSounds[snd] then
+            local eq = snd:FindFirstChild("FPlus_SilentFilter")
+            if not eq then
+                eq = Instance.new("EqualizerSoundEffect")
+                eq.Name = "FPlus_SilentFilter"
+                eq.LowGain = -80
+                eq.MidGain = -80
+                eq.HighGain = -80
+                eq.Priority = 1000
+                eq.Parent = snd
+            end
+
+            SuppressedSounds[snd] = {
+                OriginalGroup = snd.SoundGroup,
+                Filter = eq
+            }
+            snd.SoundGroup = MuteBus
+        else
+            if snd.SoundGroup ~= MuteBus then
+                snd.SoundGroup = MuteBus
+            end
+        end
+    end
+
+    local function RestoreGameThemes()
+        for snd, data in pairs(SuppressedSounds) do
+            if snd and snd.Parent then
+                pcall(function() snd.SoundGroup = data.OriginalGroup end)
+                if data.Filter and data.Filter.Parent then
+                    data.Filter:Destroy()
+                end
+            end
+        end
+        table.clear(SuppressedSounds)
+    end
+
+    local function IsInLobby()
+        local map = workspace:FindFirstChild("Map")
+        if not map or not map:FindFirstChild("Ingame") then return true end
+        local sideBar = MainUI:FindFirstChild("Sidebar")
+        if sideBar and sideBar:GetAttribute("WasVisible") == true then return true end
+        local themes = workspace:FindFirstChild("Themes")
+        if themes and themes:FindFirstChild("Lobby") and themes.Lobby:IsA("Sound") and themes.Lobby.IsPlaying then
+            return true
+        end
+        return false
+    end
+
+    local function IsLocalKiller()
+        local char = LocalPlayer.Character
+        local killersFolder = workspace.Players:FindFirstChild("Killers")
+        return char and killersFolder and char:IsDescendantOf(killersFolder) and (char:GetAttribute("Dead") ~= true)
+    end
+
+    local function IsSoundProtected(snd)
+        if not snd or not snd:IsA("Sound") or snd.Name:find("Custom_") then return true end
+        local nameLow = snd.Name:lower()
+        if nameLow:find("lobby") or nameLow:find("execution") or nameLow:find("intro") 
+            or nameLow:find("victory") or nameLow:find("kill") or nameLow:find("scare") then
+            return true
+        end
+        return false
+    end
+
+    local themesFolder = workspace:FindFirstChild("Themes")
+    if themesFolder then
+        themesFolder.ChildAdded:Connect(function(child)
+            if child:IsA("Sound") and not IsSoundProtected(child) then
+                local inLobby = IsInLobby()
+
+                local isChaseOn = not inLobby and IsLocalKiller() and GetValue("Chase_Active") and (Chase_State and Chase_State.CurrentLayer > 0)
+                local isLMSOn   = (not inLobby or GetValue("LMS_LobbyAudio") == true) and (LMS_State and LMS_State.LMSActive) and (GetValue("LMS_SurvTrack") ~= "Off" or GetValue("LMS_KillerTrack") ~= "Off")
+
+                if isChaseOn or isLMSOn then
+                    SuppressAudio(child)
+                end
+            end
+        end)
+    end
+
+    -- [ Native Emotes Memory Hook ]
+    local EmotesModule = nil
+    local function GetEmotesModule()
+        if EmotesModule then return EmotesModule end
+        if getgc then
+            pcall(function()
+                for _, obj in ipairs(getgc(true)) do
+                    if type(obj) == "table" and rawget(obj, "BuildMenu") and rawget(obj, "ToggleEmoteMenu") and rawget(obj, "GetPlayerEmotes") then
+                        EmotesModule = obj
+                        break
+                    end
+                end
+            end)
+        end
+        return EmotesModule
+    end
+
+    local function ForceBuildNativeEmoteMenu()
+        local mod = GetEmotesModule()
+        if not mod then return end
+
+        if not mod.__FPlusPatched then
+            mod.__FPlusPatched = true
+            local origGetEmotes = mod.GetPlayerEmotes
+            mod.GetPlayerEmotes = function(self)
+                local prevType = workspace:GetAttribute("ServerType")
+                workspace:SetAttribute("ServerType", "VIP")
+                local s, res = pcall(origGetEmotes, self)
+                workspace:SetAttribute("ServerType", prevType)
+                if s and res then return res end
+                return origGetEmotes(self)
+            end
+        end
+
+        pcall(function()
+            mod:BuildMenu()
+        end)
+    end
+
+    local function ToggleNativeEmoteWheel()
+        local mod = GetEmotesModule()
+        if mod and mod.ToggleEmoteMenu then
+            mod:ToggleEmoteMenu()
+        end
+    end
+
+    LocalPlayer.CharacterAdded:Connect(function()
+        task.delay(1.5, function()
+            if GetValue("Fun_UnlockKillerEmotes") then
+                ForceBuildNativeEmoteMenu()
+            end
+        end)
+    end)
+    task.delay(2, function()
+        if GetValue("Fun_UnlockKillerEmotes") then
+            ForceBuildNativeEmoteMenu()
+        end
+    end)
+
+    -- [ Emote Walk Monitor ]
+    RunService.Heartbeat:Connect(function()
+        if GetValue("Fun_EmoteWalk") then
+            local char = LocalPlayer.Character
+            local spdMods = char and char:FindFirstChild("SpeedMultipliers")
+            if spdMods then
+                local emotingVal = spdMods:FindFirstChild("Emoting")
+                if emotingVal then
+                    emotingVal:Destroy()
+                end
+            end
+        end
+    end)
+
+    -- [ Emote Game Settings Sync ]
+    local function GetEmoteFolder()
+        return PlayerData:FindFirstChild("Settings") and PlayerData.Settings:FindFirstChild("Emote")
+    end
+
+    local function SetEmoteSetting(settingName, val)
+        local fld = GetEmoteFolder()
+        local obj = fld and fld:FindFirstChild(settingName)
+        if obj and obj.Value ~= val then
+            obj.Value = val
+        end
+    end
+
+    local function BindEmoteSetting(settingName, plusInstance)
+        task.spawn(function()
+            local settingsFld = PlayerData:WaitForChild("Settings", 20)
+            local emoteFld = settingsFld and settingsFld:WaitForChild("Emote", 20)
+            local targetObj = emoteFld and emoteFld:WaitForChild(settingName, 20)
+            if targetObj then
+                plusInstance.Value = targetObj.Value
+                targetObj.Changed:Connect(function(v)
+                    plusInstance.Value = v
+                end)
+            end
+        end)
+    end
+
+    -- [ ChaseThemes Game Hook ]
+    local GameChaseThemes = nil
+    local function GetChaseModule()
+        if GameChaseThemes then return GameChaseThemes end
+        if getgc then
+            pcall(function()
+                for _, obj in ipairs(getgc(true)) do
+                    if type(obj) == "table" and rawget(obj, "LayerChanged") and rawget(obj, "KillerThemes") then
+                        GameChaseThemes = obj
+                        break
+                    end
+                end
+            end)
+        end
+        return GameChaseThemes
+    end
+    GetChaseModule()
+
+    -- [ Track Registry & Scanner ]
+    local TrackRegistry = { Survivor = {}, Killer = {}, Chase = {} }
+
+    local function SafeList(dir)
+        local results = {}
+        if not listfiles then return results end
+        for _, path in ipairs({ dir, dir:gsub("/", "\\"), dir .. "/", dir:gsub("/", "\\") .. "\\" }) do
+            local s, files = pcall(listfiles, path)
+            if s and type(files) == "table" and #files > 0 then
+                for _, f in ipairs(files) do
+                    local fullPath = tostring(f):gsub("\\", "/")
+                    if not fullPath:find("/") then
+                        fullPath = dir:gsub("\\", "/") .. "/" .. fullPath
+                    end
+                    results[#results + 1] = fullPath
+                end
+                break
+            end
+        end
+        return results
+    end
+
+    local function ParseChaseTiming(txtPath)
+        local timings = {}
+        if isfile and readfile then
+            local exists = false
+            pcall(function() exists = isfile(txtPath) or isfile(txtPath:gsub("/", "\\")) end)
+            if exists then
+                local content = ""
+                pcall(function() content = readfile(isfile(txtPath) and txtPath or txtPath:gsub("/", "\\")) end)
+                for line in content:gmatch("[^\r\n]+") do
+                    local key, sStart, sEnd = line:match("([%w_%-]+)%s*:%s*([%d%.]+)%s*-%s*([%d%.]+)")
+                    if key and sStart and sEnd then
+                        local k = key:lower():gsub("%s+", "")
+                        local startT, endT = tonumber(sStart), tonumber(sEnd)
+                        if startT and endT and endT > startT then
+                            if k:find("lay1%-2") or k:find("lay1_2") or k:find("lay1to2") or k:find("layer1%-2") then
+                                timings.Trans1_2 = { Start = startT, End = endT }
+                            elseif k:find("lay2%-3") or k:find("lay2_3") or k:find("lay2to3") or k:find("layer2%-3") then
+                                timings.Trans2_3 = { Start = startT, End = endT }
+                            elseif k:find("lay3%-chase") or k:find("lay3_chase") or k:find("lay3tochase") or k:find("layer3%-chase") then
+                                timings.Trans3_Chase = { Start = startT, End = endT }
+                            elseif k:find("lay1") or k:find("layer1") then
+                                timings.Lay1 = { Start = startT, End = endT }
+                            elseif k:find("lay2") or k:find("layer2") then
+                                timings.Lay2 = { Start = startT, End = endT }
+                            elseif k:find("lay3") or k:find("layer3") then
+                                timings.Lay3 = { Start = startT, End = endT }
+                            elseif k:find("chase") then
+                                timings.Chase = { Start = startT, End = endT }
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return timings
+    end
+
+    local function ScanAllTracks()
+        table.clear(TrackRegistry.Survivor)
+        table.clear(TrackRegistry.Killer)
+        table.clear(TrackRegistry.Chase)
+
+        local survList = {"None", "Off"}
+        local killList = {"None", "Off"}
+        local chaseList = {"None", "Off"}
+        local seenSurv, seenKill, seenChase = {}, {}, {}
+
+        local folders = { SURV_DIR, KILL_DIR, LMS_DIR, CHASE_DIR, MUSIC_DIR, BASE_ROOT }
+
+        local function CheckFile(fullPath)
+            local norm = fullPath:gsub("\\", "/")
+            local filename = norm:match("[^/]+$")
+            if not filename then return end
+
+            local ext = filename:match("%.([^%.]+)$")
+            if ext then
+                ext = ext:lower()
+                if ext == "mp3" or ext == "ogg" or ext == "wav" then
+                    local cleanName = filename:sub(1, #filename - #ext - 1)
+                    local lowPath = norm:lower()
+                    local lowName = cleanName:lower()
+
+                    if lowPath:find("chase") then
+                        if not seenChase[lowName] then
+                            seenChase[lowName] = true
+                            local txtPath = norm:sub(1, #norm - #ext) .. "txt"
+                            TrackRegistry.Chase[cleanName] = {
+                                AudioPath = norm,
+                                Timings = ParseChaseTiming(txtPath)
+                            }
+                            table.insert(chaseList, cleanName)
+                        end
+                    end
+
+                    local isKiller = lowPath:find("/killer") or lowPath:find("\\killer")
+                    local isChase  = lowPath:find("chase")
+                    if not isKiller and not isChase then
+                        if not seenSurv[lowName] then
+                            seenSurv[lowName] = true
+                            TrackRegistry.Survivor[cleanName] = norm
+                            table.insert(survList, cleanName)
+                        end
+                    end
+
+                    local isSurv = lowPath:find("/survivor") or lowPath:find("\\survivor")
+                    if not isSurv and not isChase then
+                        if not seenKill[lowName] then
+                            seenKill[lowName] = true
+                            TrackRegistry.Killer[cleanName] = norm
+                            table.insert(killList, cleanName)
+                        end
+                    end
+                end
+            end
+        end
+
+        for _, fld in ipairs(folders) do
+            for _, f in ipairs(SafeList(fld)) do
+                CheckFile(f)
+            end
+        end
+
+        local function SortOptions(tbl)
+            table.sort(tbl, function(a, b)
+                if a == "None" then return true elseif b == "None" then return false end
+                if a == "Off" then return true elseif b == "Off" then return false end
+                return a:lower() < b:lower()
+            end)
+        end
+        SortOptions(survList)
+        SortOptions(killList)
+        SortOptions(chaseList)
+
+        return table.concat(survList, "|"), table.concat(killList, "|"), table.concat(chaseList, "|")
+    end
+
+    local initSurv, initKill, initChase = ScanAllTracks()
+
+    local function UpdateDropdownOptions(settingName, newOptionsString)
+        local inst = GetValue(settingName, true)
+        if inst then
+            inst:SetAttribute("Options", newOptionsString)
+        end
+    end
+
+    local function RefreshAudioDropdowns(notify)
+        local sOpts, kOpts, cOpts = ScanAllTracks()
+        UpdateDropdownOptions("LMS_SurvTrack", sOpts)
+        UpdateDropdownOptions("LMS_KillerTrack", kOpts)
+        UpdateDropdownOptions("Chase_Track", cOpts)
+
+        if notify and typeof(ColoredPrint) == "function" then
+            ColoredPrint("Audio Library Rescanned Successfully!", "success", Color3.fromRGB(0, 255, 128))
+        end
+    end
+
+    local function ResolveTrack(role, selectedTrack)
+        if not selectedTrack or selectedTrack == "None" or selectedTrack == "Off" then return nil end
+        local finalPath = nil
+        if role == "Chase" then
+            finalPath = TrackRegistry.Chase[selectedTrack] and TrackRegistry.Chase[selectedTrack].AudioPath
+        else
+            finalPath = TrackRegistry[role] and TrackRegistry[role][selectedTrack]
+        end
+
+        if not finalPath then
+            ScanAllTracks()
+            if role == "Chase" then
+                finalPath = TrackRegistry.Chase[selectedTrack] and TrackRegistry.Chase[selectedTrack].AudioPath
+            else
+                finalPath = TrackRegistry[role] and TrackRegistry[role][selectedTrack]
+            end
+        end
+
+        if not finalPath and isfile then
+            local checkDirs = { SURV_DIR, KILL_DIR, LMS_DIR, CHASE_DIR, MUSIC_DIR, BASE_ROOT }
+            for _, d in ipairs(checkDirs) do
+                for _, ext in ipairs({ ".mp3", ".ogg", ".wav" }) do
+                    local directPath = d .. "/" .. selectedTrack .. ext
+                    local exists = false
+                    pcall(function() exists = isfile(directPath) or isfile(directPath:gsub("/", "\\")) end)
+                    if exists then
+                        finalPath = directPath
+                        break
+                    end
+                end
+                if finalPath then break end
+            end
+        end
+
+        if finalPath and (getcustomasset or getsynasset) then
+            local func = getcustomasset or getsynasset
+            local s, asset = pcall(func, finalPath)
+            if s and asset then return asset end
+            local s2, asset2 = pcall(func, finalPath:gsub("/", "\\"))
+            if s2 and asset2 then return asset2 end
+        end
+        return nil
+    end
+
+    -- [ 2D Visual Identity Database ]
+    local CHAR_DATA = {
+        ["nosferatu"]    = { Name = "Nosferatu",  Asset = "73910004346494" },
+        ["slasher"]      = { Name = "Slasher",    Asset = "89705807157114" },
+        ["slasherswift"] = { Name = "Slasher",    Asset = "89705807157114" },
+        ["jason"]        = { Name = "Slasher",    Asset = "89705807157114" },
+        ["c00lkidd"]     = { Name = "c00lkidd",   Asset = "88633413108412" },
+        ["coolkidd"]     = { Name = "c00lkidd",   Asset = "88633413108412" },
+        ["1x1x1x1"]      = { Name = "1x1x1x1",    Asset = "134812265408242" },
+        ["1x"]           = { Name = "1x1x1x1",    Asset = "134812265408242" },
+        ["noli"]         = { Name = "Noli",       Asset = "130245853958963" },
+        ["johndoe"]      = { Name = "John Doe",   Asset = "134152952704357" },
+        ["johnd"]        = { Name = "John Doe",   Asset = "134152952704357" },
+        ["guest666"]     = { Name = "Guest 666",  Asset = "76986230332221" },
+        ["sixer"]        = { Name = "Guest 666",  Asset = "76986230332221" },
+        ["azure"]        = { Name = "Azure",      Asset = "106480134050284" },
+        ["azurewrath"]   = { Name = "Azure",      Asset = "106480134050284" },
+        ["noob"]         = { Name = "Noob",       Asset = "131391655751675" },
+        ["taph"]         = { Name = "Taph",       Asset = "105128362637752" },
+        ["janedoe"]      = { Name = "Jane Doe",   Asset = "88240942202360" },
+        ["jane"]         = { Name = "Jane Doe",   Asset = "88240942202360" },
+        ["veeronica"]    = { Name = "Veeronica",  Asset = "89228649343292" },
+        ["veronica"]     = { Name = "Veeronica",  Asset = "89228649343292" },
+        ["guest1337"]    = { Name = "Guest 1337", Asset = "98555070576532" },
+        ["guest"]        = { Name = "Guest 1337", Asset = "98555070576532" },
+        ["twotime"]      = { Name = "Two Time",   Asset = "126428832561537" },
+        ["chance"]       = { Name = "Chance",     Asset = "106052387033095" },
+        ["dusekkar"]     = { Name = "Dusekkar",   Asset = "89291691738692" },
+        ["shedletsky"]   = { Name = "Shedletsky", Asset = "97705711426376" },
+        ["builderman"]   = { Name = "Builderman", Asset = "99052732032039" },
+        ["elliot"]       = { Name = "Elliot",     Asset = "138155581981576" },
+        ["007n7"]        = { Name = "007n7",      Asset = "138014745095912" },
+        ["helperbot"]    = { Name = "Helperbot",  Asset = "87480817894225" },
+    }
+
+    local KILLER_KEYS = {
+        ["nosferatu"] = true, ["slasher"] = true, ["slasherswift"] = true, ["jason"] = true,
+        ["c00lkidd"] = true, ["coolkidd"] = true, ["1x1x1x1"] = true, ["1x"] = true,
+        ["noli"] = true, ["johndoe"] = true, ["johnd"] = true, ["guest666"] = true,
+        ["sixer"] = true, ["azure"] = true, ["azurewrath"] = true
+    }
+
+    local function DetectRole(model)
+        if not model or not model:IsA("Model") then return "Survivor" end
+        local killersFolder = workspace.Players:FindFirstChild("Killers")
+        local survFolder = workspace.Players:FindFirstChild("Survivors")
+
+        if killersFolder and model:IsDescendantOf(killersFolder) then return "Killer" end
+        if survFolder and model:IsDescendantOf(survFolder) then return "Survivor" end
+
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        if hum and hum.MaxHealth >= 500 then return "Killer" end
+
+        local clean = model.Name:lower():gsub("[%s_%-]+", "")
+        for k, _ in pairs(KILLER_KEYS) do
+            if clean:find(k) then return "Killer" end
+        end
+        return "Survivor"
+    end
+
+    local function ResolveEntity(model, fallbackRole)
+        local rawNames = {}
+        if model and model:IsA("Model") then
+            local plr = Players:GetPlayerFromCharacter(model)
+            if plr then table.insert(rawNames, plr.DisplayName) end
+            table.insert(rawNames, model:GetAttribute("Character"))
+            table.insert(rawNames, model:GetAttribute("CharName"))
+            table.insert(rawNames, model:GetAttribute("DisplayName"))
+            table.insert(rawNames, model:GetAttribute("Actor"))
+            table.insert(rawNames, model.Name)
+        end
+
+        for _, raw in ipairs(rawNames) do
+            if raw and typeof(raw) == "string" and raw ~= "" then
+                local clean = raw:lower():gsub("[%s_%-]+", "")
+                for key, data in pairs(CHAR_DATA) do
+                    local keyClean = key:lower():gsub("[%s_%-]+", "")
+                    if clean == keyClean or clean:find("^" .. keyClean) or clean:find(keyClean .. "$") then
+                        return "rbxthumb://type=Asset&id=" .. data.Asset .. "&w=420&h=420", data.Name
+                    end
+                end
+            end
+        end
+
+        if fallbackRole == "Killer" then
+            return "rbxthumb://type=Asset&id=89705807157114&w=420&h=420", (model and model.Name or "Killer")
+        else
+            return "rbxthumb://type=Asset&id=131391655751675&w=420&h=420", (model and model.Name or "Survivor")
+        end
+    end
+
+    -- [ Visual FX Container ]
+    local FX_Gui = nil
+    local function GetFXGui()
+        if not FX_Gui or not FX_Gui.Parent then
+            FX_Gui = Instance.new("ScreenGui")
+            FX_Gui.Name = "FPlus_LMS_FX"
+            FX_Gui.ResetOnSpawn = false
+            FX_Gui.IgnoreGuiInset = true
+            FX_Gui.DisplayOrder = 120
+            pcall(function() FX_Gui.Parent = CoreGui end)
+            if not FX_Gui.Parent then FX_Gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+        end
+        return FX_Gui
+    end
+
+    local function PlayFXSound(id, baseVolume)
+        local masterVol = tonumber(GetValue("LMS_FXVolume")) or 1.0
+        local s = Instance.new("Sound")
+        s.SoundId = "rbxassetid://" .. id
+        s.Volume = baseVolume * masterVol
+        s.Parent = SoundService
+        s.Name = "LMS_FX_Audio"
+        s:Play()
+        Debris:AddItem(s, 10)
+        return s
+    end
+
+    -- [ Visual FX Handlers ]
+    local StartVisuals = {}
+
+    StartVisuals["Pizza Tower"] = function()
+        local container = GetFXGui()
+        local img = Instance.new("ImageLabel", container)
+        img.BackgroundTransparency = 1
+        img.Size = UDim2.fromScale(0.55, 0.4)
+        img.SizeConstraint = Enum.SizeConstraint.RelativeYY
+        img.AnchorPoint = Vector2.new(0.5, 0.5)
+        img.Position = UDim2.fromScale(0.5, 1.5)
+        img.Image = "rbxassetid://77264911614141"
+        img.ZIndex = 25
+
+        PlayFXSound("96050676918804", 1)
+        TweenService:Create(img, TweenInfo.new(4.5, Enum.EasingStyle.Linear), { Position = UDim2.fromScale(0.5, -0.5) }):Play()
+
+        task.spawn(function()
+            local toggle = false
+            while img and img.Parent and img.Position.Y.Scale > -0.45 do
+                img.Image = toggle and "rbxassetid://77264911614141" or "rbxassetid://92555127882199"
+                toggle = not toggle
+                task.wait(0.06)
+            end
+            if img then img:Destroy() end
+        end)
+    end
+
+    StartVisuals["FNF"] = function()
+        local container = GetFXGui()
+        PlayFXSound("6555005549", 0.35)
+        task.wait(0.85)
+
+        local function CreateStep(id)
+            local im = Instance.new("ImageLabel", container)
+            im.Size = UDim2.fromScale(0.4, 0.2)
+            im.SizeConstraint = Enum.SizeConstraint.RelativeYY
+            im.AnchorPoint = Vector2.new(0.5, 0.5)
+            im.Position = UDim2.fromScale(0.5, 0.5)
+            im.BackgroundTransparency = 1
+            im.Image = "rbxassetid://" .. id
+            im.ImageTransparency = 1
+            im.ZIndex = 25
+            return im
+        end
+
+        task.spawn(function()
+            local r = CreateStep("6443228613")
+            TweenService:Create(r, TweenInfo.new(0.1), { ImageTransparency = 0 }):Play(); task.wait(0.6)
+            TweenService:Create(r, TweenInfo.new(0.1), { ImageTransparency = 1, Position = UDim2.fromScale(0.5, 0.4) }):Play()
+            Debris:AddItem(r, 0.2)
+
+            local s = CreateStep("6443225217")
+            TweenService:Create(s, TweenInfo.new(0.1), { ImageTransparency = 0 }):Play(); task.wait(0.6)
+            TweenService:Create(s, TweenInfo.new(0.1), { ImageTransparency = 1, Position = UDim2.fromScale(0.5, 0.4) }):Play()
+            Debris:AddItem(s, 0.2)
+
+            local g = CreateStep("6443224742")
+            TweenService:Create(g, TweenInfo.new(0.1), { ImageTransparency = 0 }):Play(); task.wait(0.8)
+            TweenService:Create(g, TweenInfo.new(0.4), { ImageTransparency = 1, Size = UDim2.fromScale(0.6, 0.3) }):Play()
+            Debris:AddItem(g, 0.5)
+        end)
+    end
+
+    StartVisuals["DOD"] = function(isTest)
+        local container = GetFXGui()
+        local survFolder = workspace.Players:FindFirstChild("Survivors")
+        local killFolder = workspace.Players:FindFirstChild("Killers")
+
+        local survModel, killModel = nil, nil
+        local myChar = LocalPlayer.Character
+        local myRole = DetectRole(myChar)
+
+        if isTest then
+            if myRole == "Killer" then
+                killModel = myChar
+                if survFolder then
+                    for _, c in ipairs(survFolder:GetChildren()) do
+                        if DetectRole(c) == "Survivor" then survModel = c break end
+                    end
+                end
+            else
+                survModel = myChar
+                if killFolder then
+                    for _, c in ipairs(killFolder:GetChildren()) do
+                        if DetectRole(c) == "Killer" then killModel = c break end
+                    end
+                end
+            end
+        else
+            if survFolder then
+                for _, c in ipairs(survFolder:GetChildren()) do
+                    local hum = c:FindFirstChildOfClass("Humanoid")
+                    local isDead = (c:GetAttribute("Dead") == true) or (hum and hum.Health <= 0)
+                    if not isDead and DetectRole(c) == "Survivor" then
+                        survModel = c
+                        break
+                    end
+                end
+            end
+            if killFolder then
+                for _, c in ipairs(killFolder:GetChildren()) do
+                    local hum = c:FindFirstChildOfClass("Humanoid")
+                    local isDead = (c:GetAttribute("Dead") == true) or (hum and hum.Health <= 0)
+                    if not isDead and DetectRole(c) == "Killer" then
+                        killModel = c
+                        break
+                    end
+                end
+            end
+        end
+
+        if not survModel then
+            survModel = (myRole == "Survivor" and myChar) or (survFolder and survFolder:FindFirstChildWhichIsA("Model"))
+        end
+        if not killModel then
+            killModel = (myRole == "Killer" and myChar) or (killFolder and killFolder:FindFirstChildWhichIsA("Model"))
+        end
+
+        local survImg, survName = ResolveEntity(survModel, "Survivor")
+        local killImg, killName = ResolveEntity(killModel, "Killer")
+
+        local MainFrame = Instance.new("Frame", container)
+        MainFrame.Name = "DOD_Overlay"
+        MainFrame.Size = UDim2.fromScale(1, 1)
+        MainFrame.BackgroundTransparency = 1
+        MainFrame.ZIndex = 10
+
+        local flash = Instance.new("Frame", MainFrame)
+        flash.Size = UDim2.fromScale(1, 1)
+        flash.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+        flash.BackgroundTransparency = 0.3
+        flash.ZIndex = 11
+        TweenService:Create(flash, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 1 }):Play()
+
+        PlayFXSound("132670234831172", 0.75)
+
+        local function SpawnSprite(imgId, targetCenterX, startX)
+            local box = Instance.new("Frame", MainFrame)
+            box.Size = UDim2.fromScale(0.29, 0.55)
+            box.AnchorPoint = Vector2.new(0.5, 1)
+            box.Position = UDim2.new(startX, 0, 1, 0)
+            box.BackgroundTransparency = 1
+            box.ZIndex = 14
+
+            local im = Instance.new("ImageLabel", box)
+            im.Size = UDim2.fromScale(1, 1)
+            im.BackgroundTransparency = 1
+            im.Image = imgId
+            im.ScaleType = Enum.ScaleType.Fit
+            im.AnchorPoint = Vector2.new(0.5, 0.5)
+            im.Position = UDim2.fromScale(0.5, 0.5)
+            im.ZIndex = 15
+
+            TweenService:Create(box, TweenInfo.new(0.65, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), { Position = UDim2.new(targetCenterX, 0, 1, 0) }):Play()
+            return box
+        end
+
+        local sBox = SpawnSprite(survImg, 0.2, -0.4)
+        local kBox = SpawnSprite(killImg, 0.8, 1.4)
+
+        local leftGroup = Instance.new("Frame", MainFrame)
+        leftGroup.Size = UDim2.new(0.32, 0, 0, 140)
+        leftGroup.AnchorPoint = Vector2.new(0.5, 0)
+        leftGroup.Position = UDim2.new(-0.4, 0, 0.02, 0)
+        leftGroup.BackgroundTransparency = 1
+        leftGroup.ZIndex = 16
+
+        local diesHeader = Instance.new("TextLabel", leftGroup)
+        diesHeader.Size = UDim2.new(1, 0, 0, 32)
+        diesHeader.Position = UDim2.new(0, 0, 0, 0)
+        diesHeader.BackgroundTransparency = 1
+        diesHeader.Text = "Here dies..."
+        diesHeader.TextColor3 = Color3.fromRGB(255, 255, 255)
+        diesHeader.TextTransparency = 0.35
+        diesHeader.Font = Enum.Font.GothamMedium
+        diesHeader.TextSize = 28
+        diesHeader.TextXAlignment = Enum.TextXAlignment.Center
+        diesHeader.ZIndex = 17
+
+        local survBox = Instance.new("Frame", leftGroup)
+        survBox.Size = UDim2.new(1, 0, 0, 52)
+        survBox.Position = UDim2.new(0, 0, 0, 35)
+        survBox.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+        survBox.BackgroundTransparency = 0.2
+        survBox.ZIndex = 17
+        local sStroke = Instance.new("UIStroke", survBox)
+        sStroke.Color = Color3.fromRGB(255, 255, 255); sStroke.Transparency = 0.45; sStroke.Thickness = 2
+
+        local sLbl = Instance.new("TextLabel", survBox)
+        sLbl.Size = UDim2.fromScale(1, 1); sLbl.BackgroundTransparency = 1
+        sLbl.Text = tostring(survName):upper(); sLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+        sLbl.Font = Enum.Font.GothamBold; sLbl.TextSize = 32
+        sLbl.ZIndex = 18
+
+        local leftExcl = Instance.new("TextLabel", leftGroup)
+        leftExcl.Size = UDim2.new(0, 140, 0, 140); leftExcl.Position = UDim2.new(1, -60, 0, 20)
+        leftExcl.BackgroundTransparency = 1; leftExcl.Text = "!"
+        leftExcl.TextColor3 = Color3.fromRGB(255, 255, 255); leftExcl.TextTransparency = 0.4
+        leftExcl.Font = Enum.Font.GothamBold; leftExcl.TextSize = 160; leftExcl.Rotation = 90
+        leftExcl.ZIndex = 16
+
+        TweenService:Create(leftGroup, TweenInfo.new(0.65, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), { Position = UDim2.new(0.2, 0, 0.02, 0) }):Play()
+
+        local rightGroup = Instance.new("Frame", MainFrame)
+        rightGroup.Size = UDim2.new(0.32, 0, 0, 140)
+        rightGroup.AnchorPoint = Vector2.new(0.5, 0)
+        rightGroup.Position = UDim2.new(1.4, 0, 0.02, 0)
+        rightGroup.BackgroundTransparency = 1
+        rightGroup.ZIndex = 16
+
+        local deathsHeader = Instance.new("TextLabel", rightGroup)
+        deathsHeader.Size = UDim2.new(1, 0, 0, 32); deathsHeader.Position = UDim2.new(0, 0, 0, 0)
+        deathsHeader.BackgroundTransparency = 1; deathsHeader.Text = "Here deaths..."
+        deathsHeader.TextColor3 = Color3.fromRGB(255, 255, 255); deathsHeader.TextTransparency = 0.35
+        deathsHeader.Font = Enum.Font.GothamMedium; deathsHeader.TextSize = 28
+        deathsHeader.TextXAlignment = Enum.TextXAlignment.Center
+        deathsHeader.ZIndex = 17
+
+        local killBox = Instance.new("Frame", rightGroup)
+        killBox.Size = UDim2.new(1, 0, 0, 52); killBox.Position = UDim2.new(0, 0, 0, 35)
+        killBox.BackgroundColor3 = Color3.fromRGB(15, 15, 15); killBox.BackgroundTransparency = 0.2
+        killBox.ZIndex = 17
+        local kStroke = Instance.new("UIStroke", killBox)
+        kStroke.Color = Color3.fromRGB(255, 255, 255); kStroke.Transparency = 0.45; kStroke.Thickness = 2
+
+        local kLbl = Instance.new("TextLabel", killBox)
+        kLbl.Size = UDim2.fromScale(1, 1); kLbl.BackgroundTransparency = 1
+        kLbl.Text = tostring(killName):upper(); kLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+        kLbl.Font = Enum.Font.GothamBold; kLbl.TextSize = 32
+        kLbl.ZIndex = 18
+
+        local rightExcl = Instance.new("TextLabel", rightGroup)
+        rightExcl.Size = UDim2.new(0, 140, 0, 140); rightExcl.Position = UDim2.new(0, -80, 0, 20)
+        rightExcl.BackgroundTransparency = 1; rightExcl.Text = "!"
+        rightExcl.TextColor3 = Color3.fromRGB(255, 255, 255); rightExcl.TextTransparency = 0.4
+        rightExcl.Font = Enum.Font.GothamBold; rightExcl.TextSize = 160; rightExcl.Rotation = -90
+        rightExcl.ZIndex = 16
+
+        TweenService:Create(rightGroup, TweenInfo.new(0.65, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), { Position = UDim2.new(0.8, 0, 0.02, 0) }):Play()
+
+        local vsGroup = Instance.new("Frame", MainFrame)
+        vsGroup.Size = UDim2.new(0, 320, 0, 140)
+        vsGroup.AnchorPoint = Vector2.new(0.5, 0)
+        vsGroup.Position = UDim2.new(0.5, 0, -0.4, 0)
+        vsGroup.BackgroundTransparency = 1
+        vsGroup.ZIndex = 18
+
+        local function MakeRope(xOffset)
+            local r = Instance.new("Frame", vsGroup)
+            r.Size = UDim2.new(0, 3, 0, 45)
+            r.Position = UDim2.new(0.5, xOffset, 0, 0)
+            r.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+            r.BorderSizePixel = 0
+            r.ZIndex = 19
+            local s = Instance.new("UIStroke", r); s.Color = Color3.fromRGB(255, 255, 255); s.Thickness = 1.2
+            return r
+        end
+        MakeRope(-65); MakeRope(65)
+
+        local vsBox = Instance.new("Frame", vsGroup)
+        vsBox.Size = UDim2.new(1, 0, 0, 84)
+        vsBox.Position = UDim2.new(0, 0, 0, 45)
+        vsBox.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+        vsBox.BackgroundTransparency = 0.2
+        vsBox.ZIndex = 19
+        local vStroke = Instance.new("UIStroke", vsBox); vStroke.Color = Color3.fromRGB(255, 255, 255); vStroke.Thickness = 2
+
+        local vsLbl = Instance.new("TextLabel", vsBox)
+        vsLbl.Size = UDim2.fromScale(1, 1); vsLbl.BackgroundTransparency = 1
+        vsLbl.Text = "VS."
+        vsLbl.Font = Enum.Font.FredokaOne
+        vsLbl.TextSize = 50
+        vsLbl.TextColor3 = Color3.fromRGB(255, 220, 0)
+        vsLbl.ZIndex = 20
+
+        local grad = Instance.new("UIGradient", vsLbl)
+        grad.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 120, 0)),
+            ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 240, 90)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 120, 0))
+        })
+
+        local rotConn
+        local tRot = 0
+        rotConn = RunService.RenderStepped:Connect(function(dt)
+            if not grad or not grad.Parent then
+                if rotConn then rotConn:Disconnect() end
+                return
+            end
+            tRot = (tRot + dt * 140) % 360
+            grad.Rotation = tRot
+        end)
+
+        TweenService:Create(vsGroup, TweenInfo.new(0.65, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), { Position = UDim2.new(0.5, 0, 0, 0) }):Play()
+
+        task.delay(3.2, function()
+            if rotConn then rotConn:Disconnect() end
+            if sBox and sBox.Parent then TweenService:Create(sBox, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), { Position = UDim2.new(-0.4, 0, 1, 0) }):Play() end
+            if kBox and kBox.Parent then TweenService:Create(kBox, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), { Position = UDim2.new(1.4, 0, 1, 0) }):Play() end
+            if leftGroup and leftGroup.Parent then TweenService:Create(leftGroup, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), { Position = UDim2.new(-0.4, 0, 0.02, 0) }):Play() end
+            if rightGroup and rightGroup.Parent then TweenService:Create(rightGroup, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), { Position = UDim2.new(1.4, 0, 0.02, 0) }):Play() end
+            if vsGroup and vsGroup.Parent then TweenService:Create(vsGroup, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), { Position = UDim2.new(0.5, 0, -0.4, 0) }):Play() end
+            task.wait(0.45)
+            if MainFrame and MainFrame.Parent then MainFrame:Destroy() end
+        end)
+    end
+
+    -- [ LMS Core State & Cache Retention ]
+    local LMS_State = {
+        IsTriggered = false,
+        LMSActive = false,
+        VisualPlayed = false,
+        CurrentSound = nil,
+        CurrentTrackName = nil,
+        StopAt = nil
+    }
+
+    local LMS_Cache = {
+        LastPlayedAsset = nil,
+        LastPlayedTrackName = nil
+    }
+
+    local function StopLMS(instant)
+        LMS_State.IsTriggered = false
+        LMS_State.LMSActive = false
+        LMS_State.VisualPlayed = false
+        LMS_State.StopAt = nil
+        LMS_State.CurrentTrackName = nil
+
+        if FX_Gui then
+            pcall(function() FX_Gui:ClearAllChildren() end)
+        end
+
+        if LMS_State.CurrentSound then
+            local snd = LMS_State.CurrentSound
+            LMS_State.CurrentSound = nil
+            if instant then
+                snd:Stop()
+                snd:Destroy()
+            else
+                local tween = TweenService:Create(snd, TweenInfo.new(0.2, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), { Volume = 0 })
+                tween:Play()
+                tween.Completed:Once(function()
+                    snd:Stop()
+                    snd:Destroy()
+                end)
+            end
+        end
+
+        local isChaseRunning = GetValue("Chase_Active") and (GetValue("Chase_Track") ~= "None" and GetValue("Chase_Track") ~= "Off")
+        if not isChaseRunning then
+            RestoreGameThemes()
+        end
+    end
+
+    local function PlayLocalLMS(assetId, trackName)
+        if LMS_State.CurrentSound then
+            LMS_State.CurrentSound:Stop()
+            LMS_State.CurrentSound:Destroy()
+            LMS_State.CurrentSound = nil
+        end
+
+        local vol = tonumber(GetValue("LMS_Volume")) or 1.0
+        local loop = (GetValue("LMS_Loop") == true)
+
+        local snd = Instance.new("Sound")
+        snd.Name = "Custom_LMS_Audio"
+        snd.SoundId = assetId
+        snd.Volume = vol
+        snd.Looped = loop
+        snd.PlaybackSpeed = 1.0
+        snd.TimePosition = 0
+        snd.Parent = SoundService
+        snd:Play()
+
+        LMS_State.CurrentSound = snd
+        LMS_State.CurrentTrackName = trackName
+
+        LMS_Cache.LastPlayedAsset = assetId
+        LMS_Cache.LastPlayedTrackName = trackName
+    end
+
+    local function TriggerLMSVisualEffect()
+        if LMS_State.VisualPlayed then return end
+        local fxType = GetValue("LMS_StartEffect") or "None"
+        local fxFunc = StartVisuals[fxType]
+        if typeof(fxFunc) == "function" then
+            LMS_State.VisualPlayed = true
+            task.spawn(fxFunc, false)
+        end
+    end
+
+    local function CheckTrueLMS()
+        if not GetValue("LMS_Active") then
+            if LMS_State.IsTriggered or LMS_State.CurrentSound then StopLMS(true) end
+            return
+        end
+
+        local inLobby = IsInLobby()
+        local allowLobbyAudio = (GetValue("LMS_LobbyAudio") == true)
+
+        if inLobby and not allowLobbyAudio then
+            if LMS_State.IsTriggered or LMS_State.CurrentSound then StopLMS(true) end
+            return
+        end
+
+        local themes = workspace:FindFirstChild("Themes")
+        local lastSurv = themes and themes:FindFirstChild("LastSurvivor")
+        local isNativeLMS = lastSurv and lastSurv:IsA("Sound") and (lastSurv.IsPlaying or lastSurv.Playing or lastSurv.TimePosition > 0)
+
+        local survivorsFolder = workspace.Players:FindFirstChild("Survivors")
+        local spectatingFolder = workspace.Players:FindFirstChild("Spectating")
+        local killersFolder = workspace.Players:FindFirstChild("Killers")
+
+        if not survivorsFolder or not killersFolder then
+            if LMS_State.IsTriggered then StopLMS(true) end
+            return
+        end
+
+        local activeSurvivors = 0
+        local totalSurvivors = 0
+        local myCharacter = LocalPlayer.Character
+        local myHum = myCharacter and myCharacter:FindFirstChildOfClass("Humanoid")
+        local isAlive = myCharacter and (myCharacter:GetAttribute("Dead") ~= true) and (myHum and myHum.Health > 0)
+
+        local isLocalSurvivor = isAlive and myCharacter:IsDescendantOf(survivorsFolder)
+        local isLocalKiller = isAlive and myCharacter:IsDescendantOf(killersFolder)
+
+        for _, char in ipairs(survivorsFolder:GetChildren()) do
+            totalSurvivors = totalSurvivors + 1
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local isDead = (char:GetAttribute("Dead") == true) or (hum and hum.Health <= 0)
+            local isSpectating = spectatingFolder and char:IsDescendantOf(spectatingFolder)
+
+            if not isDead and not isSpectating then
+                activeSurvivors = activeSurvivors + 1
+            end
+        end
+
+        local isLMS = false
+        if isNativeLMS then
+            isLMS = true
+        elseif activeSurvivors == 1 and totalSurvivors > 1 and not inLobby then
+            isLMS = true
+        end
+
+        if inLobby and not allowLobbyAudio then
+            isLMS = false
+        end
+
+        if isLMS then
+            LMS_State.StopAt = nil
+
+            local role = "Survivor"
+            local selectedTrack = "None"
+
+            if inLobby and allowLobbyAudio then
+                role = "Survivor"
+                selectedTrack = GetValue("LMS_SurvTrack") or "None"
+            elseif isLocalSurvivor then
+                role = "Survivor"
+                selectedTrack = GetValue("LMS_SurvTrack") or "None"
+            elseif isLocalKiller then
+                role = "Killer"
+                selectedTrack = GetValue("LMS_KillerTrack") or "None"
+            else
+                local cam = workspace.CurrentCamera
+                local subject = cam and cam.CameraSubject
+                local spectatedChar = subject and (subject:IsA("Humanoid") and subject.Parent or subject:IsA("Model") and subject)
+
+                if spectatedChar and spectatedChar:IsDescendantOf(killersFolder) then
+                    role = "Killer"
+                    selectedTrack = GetValue("LMS_KillerTrack") or "None"
+                else
+                    role = "Survivor"
+                    selectedTrack = GetValue("LMS_SurvTrack") or "None"
+                end
+            end
+
+            -- [ Off Mode ]
+            if selectedTrack == "Off" then
+                if LMS_State.CurrentSound then
+                    StopLMS(false)
+                end
+                local isChaseRunning = GetValue("Chase_Active") and (GetValue("Chase_Track") ~= "None" and GetValue("Chase_Track") ~= "Off")
+                if not isChaseRunning then
+                    RestoreGameThemes()
+                end
+                return
+            end
+
+            -- MuteBus
+            if themes then
+                for _, th in ipairs(themes:GetChildren()) do
+                    if th:IsA("Sound") and not th.Name:find("Custom_") then
+                        SuppressAudio(th)
+                    end
+                end
+            end
+
+            -- Hotswap
+            if LMS_State.IsTriggered and LMS_State.CurrentTrackName ~= selectedTrack then
+                LMS_State.CurrentTrackName = selectedTrack
+                if selectedTrack == "None" then
+                    if LMS_State.CurrentSound then StopLMS(false) end
+                else
+                    local assetId = ResolveTrack(role, selectedTrack)
+                    if assetId then PlayLocalLMS(assetId, selectedTrack) end
+                end
+            end
+
+            if not LMS_State.IsTriggered then
+                LMS_State.IsTriggered = true
+                LMS_State.LMSActive = true
+                local delaySec = tonumber(GetValue("LMS_StartDelay")) or 0
+
+                task.delay(delaySec, function()
+                    if not LMS_State.IsTriggered or not GetValue("LMS_Active") then return end
+                    if IsInLobby() and not (GetValue("LMS_LobbyAudio") == true) then return end
+
+                    TriggerLMSVisualEffect()
+
+                    if selectedTrack ~= "None" and selectedTrack ~= "Off" then
+                        local assetId = ResolveTrack(role, selectedTrack)
+                        if assetId then PlayLocalLMS(assetId, selectedTrack) end
+                    end
+                end)
+            else
+                if LMS_State.CurrentSound and not LMS_State.CurrentSound.IsPlaying then
+                    LMS_State.CurrentSound:Play()
+                end
+            end
+        else
+            if LMS_State.IsTriggered then
+                if not LMS_State.StopAt then
+                    LMS_State.StopAt = os.clock() + 2.0
+                elseif os.clock() >= LMS_State.StopAt then
+                    StopLMS(true)
+                end
+            end
+        end
+    end
+
+    -- [ Custom Chase Engine ]
+    local RoundSpawnTime = 0
+    local WasInLobbyState = true
+
+    LocalPlayer.CharacterAdded:Connect(function()
+        RoundSpawnTime = os.clock()
+    end)
+
+    local ApplyTargetLayer = nil
+
+    local Chase_State = {
+        VoiceA = nil,
+        VoiceB = nil,
+        ActiveVoice = "A",
+        LoopConnA = nil,
+        LoopConnB = nil,
+        ActiveAsset = nil,
+        CurrentTrackName = nil,
+        CurrentLayer = 0,
+        CurrentTierName = nil,
+        IsTransitioning = false,
+        ZeroSince = nil,
+        LastProcessedLayer = -1,
+        LastProcessedTrack = nil,
+        ThemesSilenced = false,
+        ClosestDistance = 9999
+    }
+
+    local function IsInCutscene()
+        local themes = workspace:FindFirstChild("Themes")
+        if themes then
+            for _, snd in ipairs(themes:GetChildren()) do
+                if snd:IsA("Sound") and (snd.IsPlaying or snd.Playing) then
+                    local n = snd.Name:lower()
+                    if n:find("victory") or n:find("intro") or n:find("execution") then
+                        return true
+                    end
+                end
+            end
+        end
+
+        local char = LocalPlayer.Character
+        if char then
+            if char:GetAttribute("InCutscene") == true
+                or char:GetAttribute("Executing") == true
+                or char:GetAttribute("InExecution") == true
+                or char:GetAttribute("IntroActive") == true then
+                return true
+            end
+
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local anim = hum and hum:FindFirstChildOfClass("Animator")
+            if anim then
+                for _, track in ipairs(anim:GetPlayingAnimationTracks()) do
+                    local tName = (track.Name or ""):lower()
+                    if tName:find("execution") or tName:find("intro") or tName:find("victory") then
+                        return true
+                    end
+                end
+            end
+        end
+
+        local rTimer = ReplicatedStorage:FindFirstChild("RoundTimer")
+        if rTimer and (rTimer.Value == "Round begins in:" or rTimer.Value == "Waiting for more players.") then
+            return true
+        end
+
+        return false
+    end
+
+    local IsConfigLoading = false
+
+    local function GetTrackConfigPath(trackName)
+        if not trackName or trackName == "None" or trackName == "Off" then return nil end
+        return CHASE_DIR .. "/" .. trackName .. "_Settings.txt"
+    end
+
+    local function SaveTrackConfig(trackName)
+        if IsConfigLoading or not isfile or not writefile or not trackName or trackName == "None" or trackName == "Off" then return end
+        local cfgPath = GetTrackConfigPath(trackName)
+        if not cfgPath then return end
+
+        local cfgData = {
+            Volume = tonumber(GetValue("Chase_Volume")) or 1.0,
+            FadeTime = tonumber(GetValue("Chase_FadeTime")) or 0.6,
+            StartDelay = tonumber(GetValue("Chase_StartDelay")) or 2.0,
+            RangeMultiplier = tonumber(GetValue("Chase_RangeMultiplier")) or 1.0,
+            OverlapBuffer = tonumber(GetValue("Chase_OverlapBuffer")) or 3.57,
+            BonusExpansion = tonumber(GetValue("Chase_BonusExpansion")) or 25.0,
+            DistChase = tonumber(GetValue("Chase_DistChase")) or 22,
+            DistLay3 = tonumber(GetValue("Chase_DistLay3")) or 40,
+            DistLay2 = tonumber(GetValue("Chase_DistLay2")) or 60,
+            DistLay1 = tonumber(GetValue("Chase_DistLay1")) or 85,
+            PlaybackSpeed = tonumber(GetValue("Chase_PlaybackSpeed")) or 1.0,
+        }
+
+        pcall(function()
+            writefile(cfgPath, HttpService:JSONEncode(cfgData))
+        end)
+    end
+
+    local function LoadTrackConfig(trackName)
+        if not isfile or not readfile or not trackName or trackName == "None" or trackName == "Off" then return end
+        local cfgPath = GetTrackConfigPath(trackName)
+        if not cfgPath then return end
+
+        local norm = cfgPath:gsub("/", "\\")
+        local exists = false
+        pcall(function() exists = isfile(cfgPath) or isfile(norm) end)
+
+        if not exists then
+            SaveTrackConfig(trackName)
+            return
+        end
+
+        local rawContent = ""
+        pcall(function()
+            rawContent = readfile(isfile(cfgPath) and cfgPath or norm)
+        end)
+
+        local s, data = pcall(function() return HttpService:JSONDecode(rawContent) end)
+        if s and type(data) == "table" then
+            IsConfigLoading = true
+            local function ApplyVal(key, val)
+                local inst = GetValue(key, true)
+                if inst and val ~= nil then
+                    inst.Value = val
+                end
+            end
+
+            ApplyVal("Chase_Volume", data.Volume)
+            ApplyVal("Chase_FadeTime", data.FadeTime)
+            ApplyVal("Chase_StartDelay", data.StartDelay)
+            ApplyVal("Chase_RangeMultiplier", data.RangeMultiplier)
+            ApplyVal("Chase_OverlapBuffer", data.OverlapBuffer)
+            ApplyVal("Chase_BonusExpansion", data.BonusExpansion)
+            ApplyVal("Chase_DistChase", data.DistChase)
+            ApplyVal("Chase_DistLay3", data.DistLay3)
+            ApplyVal("Chase_DistLay2", data.DistLay2)
+            ApplyVal("Chase_DistLay1", data.DistLay1)
+            ApplyVal("Chase_PlaybackSpeed", data.PlaybackSpeed)
+            task.delay(0.1, function() IsConfigLoading = false end)
+        end
+    end
+
+    local function OnChaseSettingModified()
+        local curTrack = GetValue("Chase_Track")
+        if curTrack and curTrack ~= "None" and curTrack ~= "Off" then
+            SaveTrackConfig(curTrack)
+        end
+    end
+
+    local function SilenceThemesForCustomChase()
+        if not IsLocalKiller() or IsInLobby() then return end
+        local themes = workspace:FindFirstChild("Themes")
+        if not themes then return end
+
+        for _, snd in ipairs(themes:GetChildren()) do
+            if snd:IsA("Sound") and not snd.Name:find("Custom_") then
+                local n = snd.Name:lower()
+                local isProtected = n:find("lobby") or n:find("execution") or n:find("intro")
+                    or n:find("victory") or n:find("kill") or n:find("scare")
+                if not isProtected then
+                    SuppressAudio(snd)
+                end
+            end
+        end
+    end
+
+    local function StopChaseAudio(instant)
+        Chase_State.CurrentLayer = 0
+        Chase_State.CurrentTierName = nil
+        Chase_State.IsTransitioning = false
+        Chase_State.ZeroSince = nil
+        Chase_State.LastProcessedLayer = -1
+        Chase_State.LastProcessedTrack = nil
+
+        if Chase_State.LoopConnA then Chase_State.LoopConnA:Disconnect(); Chase_State.LoopConnA = nil end
+        if Chase_State.LoopConnB then Chase_State.LoopConnB:Disconnect(); Chase_State.LoopConnB = nil end
+
+        local fadeTime = instant and 0 or (tonumber(GetValue("Chase_FadeTime")) or 0.6)
+
+        local function KillVoice(v)
+            if not v then return end
+            if instant or fadeTime <= 0.05 then
+                v:Stop()
+                v:Destroy()
+            else
+                local tw = TweenService:Create(v, TweenInfo.new(fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = 0 })
+                tw:Play()
+                tw.Completed:Once(function()
+                    v:Stop()
+                    v:Destroy()
+                end)
+                Debris:AddItem(v, fadeTime + 0.2)
+            end
+        end
+
+        KillVoice(Chase_State.VoiceA); Chase_State.VoiceA = nil
+        KillVoice(Chase_State.VoiceB); Chase_State.VoiceB = nil
+        Chase_State.ActiveAsset = nil
+
+        if Chase_State.ThemesSilenced then
+            Chase_State.ThemesSilenced = false
+            if not (LMS_State and LMS_State.LMSActive) then
+                RestoreGameThemes()
+            end
+        end
+    end
+
+    -- [ Dual-Voice Crossfader ]
+    local function PlayChaseSegment(assetId, tierName, segment, isTransition, nextTierName, nextSegment)
+        local baseVol = tonumber(GetValue("Chase_Volume")) or 1.0
+        local pitch = tonumber(GetValue("Chase_PlaybackSpeed")) or 1.0
+        local fadeTime = math.clamp(tonumber(GetValue("Chase_FadeTime")) or 0.6, 0.1, 3.0)
+        local distFactor = math.clamp(1 - (Chase_State.ClosestDistance / 100), 0, 1)
+        local targetVol = baseVol * (0.8 + 0.25 * distFactor)
+
+        local currentVoice = (Chase_State.ActiveVoice == "A") and Chase_State.VoiceA or Chase_State.VoiceB
+        local targetVoiceSlot = (Chase_State.ActiveVoice == "A") and "B" or "A"
+
+        local newVoice = Instance.new("Sound")
+        newVoice.Name = "Custom_Chase_Voice_" .. targetVoiceSlot
+        newVoice.SoundId = assetId
+        newVoice.Volume = 0
+        newVoice.PlaybackSpeed = pitch
+        newVoice.Parent = SoundService
+        newVoice:Play()
+
+        if targetVoiceSlot == "B" then
+            Chase_State.VoiceB = newVoice
+            if Chase_State.LoopConnB then Chase_State.LoopConnB:Disconnect(); Chase_State.LoopConnB = nil end
+        else
+            Chase_State.VoiceA = newVoice
+            if Chase_State.LoopConnA then Chase_State.LoopConnA:Disconnect(); Chase_State.LoopConnA = nil end
+        end
+
+        Chase_State.ActiveVoice = targetVoiceSlot
+        Chase_State.ActiveAsset = assetId
+
+        if currentVoice and currentVoice.IsPlaying then
+            local fadeOut = TweenService:Create(currentVoice, TweenInfo.new(fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = 0 })
+            fadeOut:Play()
+            fadeOut.Completed:Once(function()
+                currentVoice:Stop()
+                currentVoice:Destroy()
+            end)
+            Debris:AddItem(currentVoice, fadeTime + 0.2)
+        end
+
+        local fadeIn = TweenService:Create(newVoice, TweenInfo.new(fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = targetVol })
+        fadeIn:Play()
+
+        local function SetupLoop()
+            if not newVoice or not newVoice.Parent then return end
+            if segment and segment.Start and segment.End then
+                newVoice.Looped = false
+                newVoice.TimePosition = segment.Start
+
+                if isTransition then
+                    Chase_State.IsTransitioning = true
+                    Chase_State.CurrentTierName = tierName
+                    local conn
+                    conn = RunService.Heartbeat:Connect(function()
+                        if newVoice and newVoice.IsPlaying then
+                            if newVoice.TimePosition >= segment.End then
+                                Chase_State.IsTransitioning = false
+                                if conn then conn:Disconnect() end
+                                if nextTierName and nextSegment then
+                                    PlayChaseSegment(assetId, nextTierName, nextSegment, false, nil, nil)
+                                end
+                            end
+                        else
+                            if conn then conn:Disconnect() end
+                        end
+                    end)
+                    if targetVoiceSlot == "B" then Chase_State.LoopConnB = conn else Chase_State.LoopConnA = conn end
+                else
+                    Chase_State.IsTransitioning = false
+                    Chase_State.CurrentTierName = tierName
+                    local conn
+                    conn = RunService.Heartbeat:Connect(function()
+                        if newVoice and newVoice.IsPlaying then
+                            if newVoice.TimePosition >= segment.End then
+                                newVoice.TimePosition = segment.Start
+                            end
+                        else
+                            if conn then conn:Disconnect() end
+                        end
+                    end)
+                    if targetVoiceSlot == "B" then Chase_State.LoopConnB = conn else Chase_State.LoopConnA = conn end
+                end
+            else
+                Chase_State.IsTransitioning = false
+                newVoice.Looped = true
+                Chase_State.CurrentTierName = tierName
+            end
+        end
+
+        if not newVoice.IsLoaded then
+            newVoice.Loaded:Once(SetupLoop)
+        else
+            SetupLoop()
+        end
+    end
+
+    local function ResolveGameActiveLayer()
+        if IsInLobby() then return 0 end
+        if not IsLocalKiller() then return 0 end
+        if IsInCutscene() then return 0 end
+
+        local myChar = LocalPlayer.Character
+        if not myChar or myChar:GetAttribute("Dead") == true then return 0 end
+
+        local myRoot = myChar:FindFirstChild("HumanoidRootPart") or myChar.PrimaryPart
+        local survFolder = workspace.Players:FindFirstChild("Survivors")
+        if not myRoot or not survFolder then return 0 end
+
+        local survDistances = {}
+        local minD = 9999
+        for _, sChar in ipairs(survFolder:GetChildren()) do
+            local sHum = sChar:FindFirstChildOfClass("Humanoid")
+            local sRoot = sChar:FindFirstChild("HumanoidRootPart") or sChar.PrimaryPart
+            if sRoot and (not sHum or sHum.Health > 0) and sChar:GetAttribute("Dead") ~= true then
+                local d = (sRoot.Position - myRoot.Position).Magnitude
+                table.insert(survDistances, d)
+                if d < minD then
+                    minD = d
+                end
+            end
+        end
+        Chase_State.ClosestDistance = minD
+
+        local function CountInZone(radius)
+            local c = 0
+            for _, d in ipairs(survDistances) do
+                if d <= radius then c = c + 1 end
+            end
+            return c
+        end
+
+        local mult    = math.max(tonumber(GetValue("Chase_RangeMultiplier")) or 1.0, 0.1)
+        local buffer  = math.clamp(tonumber(GetValue("Chase_OverlapBuffer")) or 3.57, 0, 15)
+        local bonus   = math.max(tonumber(GetValue("Chase_BonusExpansion")) or 25.0, 0)
+
+        local rChaseBase = (tonumber(GetValue("Chase_DistChase")) or 22) * mult
+        local rLay3Base  = (tonumber(GetValue("Chase_DistLay3")) or 40) * mult
+        local rLay2Base  = (tonumber(GetValue("Chase_DistLay2")) or 60) * mult
+        local rLay1Base  = (tonumber(GetValue("Chase_DistLay1")) or 85) * mult
+
+        local rTotalSize = rLay1Base
+
+        local rChaseAbsorbed = rTotalSize + bonus + buffer
+        local rLay3Absorbed  = rTotalSize + buffer
+        local rLay2Absorbed  = rTotalSize + buffer
+
+        local cur = Chase_State.CurrentLayer
+
+        -- HoldPlayerTrigger
+        if cur == 4 then
+            if CountInZone(rChaseAbsorbed) > 0 then
+                return 4
+            else
+                return 0
+            end
+        elseif cur == 3 then
+            if CountInZone(rChaseBase) > 0 then return 4 end
+            if CountInZone(rLay3Absorbed) > 0 then
+                return 3
+            else
+                return 0
+            end
+        elseif cur == 2 then
+            if CountInZone(rChaseBase) > 0 then return 4 end
+            if CountInZone(rLay3Base) > 0 then return 3 end
+            if CountInZone(rLay2Absorbed) > 0 then
+                return 2
+            else
+                return 0
+            end
+        elseif cur == 1 then
+            if CountInZone(rChaseBase) > 0 then return 4 end
+            if CountInZone(rLay3Base) > 0 then return 3 end
+            if CountInZone(rLay2Base) > 0 then return 2 end
+            if CountInZone(rLay1Base + buffer) > 0 then
+                return 1
+            else
+                return 0
+            end
+        else
+            if CountInZone(rChaseBase) > 0 then return 4
+            elseif CountInZone(rLay3Base) > 0 then return 3
+            elseif CountInZone(rLay2Base) > 0 then return 2
+            elseif CountInZone(rLay1Base) > 0 then return 1
+            else return 0 end
+        end
+    end
+
+    ApplyTargetLayer = function(targetLayer)
+        local inLobby = IsInLobby()
+        if inLobby then
+            if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
+                StopChaseAudio(true)
+            end
+            return
+        end
+
+        if not IsLocalKiller() then
+            if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
+                StopChaseAudio(true)
+            end
+            return
+        end
+
+        if IsInCutscene() then
+            if Chase_State.VoiceA or Chase_State.VoiceB then
+                StopChaseAudio(false)
+            end
+            return
+        end
+
+        if not GetValue("Chase_Active") or (LMS_State and (LMS_State.LMSActive or LMS_State.IsTriggered)) then
+            if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
+                StopChaseAudio(false)
+            end
+            return
+        end
+
+        local trackName = GetValue("Chase_Track") or "None"
+        if trackName == "Off" or trackName == "None" then
+            if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
+                StopChaseAudio(false)
+            end
+            return
+        end
+
+        local startDelay = tonumber(GetValue("Chase_StartDelay")) or 2.0
+        if (os.clock() - RoundSpawnTime) < startDelay then
+            if Chase_State.VoiceA or Chase_State.VoiceB then StopChaseAudio(false) end
+            return
+        end
+
+        if targetLayer <= 0 then
+            if not Chase_State.ZeroSince then
+                Chase_State.ZeroSince = os.clock()
+            elseif os.clock() - Chase_State.ZeroSince >= 1.0 then
+                if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
+                    StopChaseAudio(false)
+                end
+            end
+            return
+        else
+            Chase_State.ZeroSince = nil
+        end
+
+        SilenceThemesForCustomChase()
+        Chase_State.ThemesSilenced = true
+
+        if targetLayer == Chase_State.LastProcessedLayer and trackName == Chase_State.LastProcessedTrack then
+            local activeV = (Chase_State.ActiveVoice == "A") and Chase_State.VoiceA or Chase_State.VoiceB
+            if activeV and activeV.IsPlaying then
+                local baseVol = tonumber(GetValue("Chase_Volume")) or 1.0
+                local distFactor = math.clamp(1 - (Chase_State.ClosestDistance / 100), 0, 1)
+                activeV.Volume = baseVol * (0.8 + 0.25 * distFactor)
+                return
+            end
+        end
+
+        if not TrackRegistry.Chase[trackName] then
+            StopChaseAudio(false)
+            return
+        end
+
+        local trackData = TrackRegistry.Chase[trackName]
+        local assetId = ResolveTrack("Chase", trackName)
+        if not assetId then
+            StopChaseAudio(false)
+            return
+        end
+
+        local timings = trackData.Timings
+        local hasTimings = (timings.Lay1 or timings.Lay2 or timings.Lay3 or timings.Chase)
+
+        if not hasTimings then
+            if targetLayer == 4 then
+                if Chase_State.CurrentTierName ~= "ChaseOnly" then
+                    PlayChaseSegment(assetId, "ChaseOnly", nil, false, nil, nil)
+                end
+            else
+                StopChaseAudio(false)
+            end
+            Chase_State.LastProcessedLayer = targetLayer
+            Chase_State.LastProcessedTrack = trackName
+            Chase_State.CurrentLayer = targetLayer
+            return
+        end
+
+        local targetTierName = nil
+        local targetSegment = nil
+
+        if targetLayer == 4 and timings.Chase then
+            targetTierName = "Chase"
+            targetSegment = timings.Chase
+        elseif targetLayer == 3 and timings.Lay3 then
+            targetTierName = "Lay3"
+            targetSegment = timings.Lay3
+        elseif targetLayer == 2 and timings.Lay2 then
+            targetTierName = "Lay2"
+            targetSegment = timings.Lay2
+        elseif targetLayer == 1 and timings.Lay1 then
+            targetTierName = "Lay1"
+            targetSegment = timings.Lay1
+        end
+
+        if not targetTierName then
+            StopChaseAudio(false)
+            return
+        end
+
+        if Chase_State.IsTransitioning then return end
+
+        if Chase_State.CurrentTierName ~= targetTierName then
+            local prevTier = Chase_State.CurrentTierName
+            if prevTier == "Lay1" and targetTierName == "Lay2" and timings.Trans1_2 then
+                PlayChaseSegment(assetId, "Trans1_2", timings.Trans1_2, true, "Lay2", timings.Lay2)
+            elseif prevTier == "Lay2" and targetTierName == "Lay3" and timings.Trans2_3 then
+                PlayChaseSegment(assetId, "Trans2_3", timings.Trans2_3, true, "Lay3", timings.Lay3)
+            elseif prevTier == "Lay3" and targetTierName == "Chase" and timings.Trans3_Chase then
+                PlayChaseSegment(assetId, "Trans3_Chase", timings.Trans3_Chase, true, "Chase", timings.Chase)
+            elseif targetTierName == "Chase" and (prevTier == "Lay1" or prevTier == "Lay2") and timings.Trans3_Chase then
+                PlayChaseSegment(assetId, "Trans3_Chase", timings.Trans3_Chase, true, "Chase", timings.Chase)
+            else
+                PlayChaseSegment(assetId, targetTierName, targetSegment, false, nil, nil)
+            end
+        end
+
+        Chase_State.LastProcessedLayer = targetLayer
+        Chase_State.LastProcessedTrack = trackName
+        Chase_State.CurrentLayer = targetLayer
+    end
+
+    local function HookGameChaseEvents()
+        local mod = GetChaseModule()
+        if mod and mod.LayerChanged and typeof(mod.LayerChanged.Connect) == "function" then
+            mod.LayerChanged:Connect(function(layer)
+                if IsLocalKiller() and not IsInLobby() then
+                    ApplyTargetLayer(layer or 0)
+                end
+            end)
+        end
+    end
+    HookGameChaseEvents()
+
+    local function SyncChaseAudio()
+        local inLobbyNow = IsInLobby()
+        if WasInLobbyState and not inLobbyNow then
+            RoundSpawnTime = os.clock()
+        end
+        WasInLobbyState = inLobbyNow
+
+        if not IsLocalKiller() or inLobbyNow then
+            if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
+                StopChaseAudio(true)
+            end
+            return
+        end
+
+        local activeLayer = ResolveGameActiveLayer()
+        ApplyTargetLayer(activeLayer)
+    end
+
+    local function RefreshChaseDropdowns(notify)
+        RefreshAudioDropdowns(notify)
+    end
+
+    -- [ UI Package Definition ]
+    local AddonsPackage = {
+        ["Fun_Credits"] = {
+            ["TabAttributes"] = {
+                ["DisplayTitle"] = "Mod Made " .. RichTextGradientColor("by doomsenseteam/R3cup", {
+                    Color3.fromRGB(65, 0, 0),
+                    Color3.fromRGB(200, 15, 15),
+                    Color3.fromRGB(255, 70, 70),
+                    Color3.fromRGB(180, 10, 10),
+                    Color3.fromRGB(65, 0, 0)
+                }),
+                ["LayoutOrder"] = 105
+            }
+        },
+        ["Custom_LMS"] = {
+            ["TabAttributes"] = {
+                ["DisplayTitle"] = "Custom LMS: Audio Engine",
+                ["LayoutOrder"] = 100
+            },
+            ["LMS_Active"] = {
+                ["DisplayDescription"] = "Master switch for custom LMS (Hotswaps seamlessly back to native on disable)",
+                ["DisplayTitle"] = "Enable LMS Engine",
+                ["LayoutOrder"] = 1,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    if not val then
+                        StopLMS(true)
+                        local isChaseRunning = GetValue("Chase_Active") and (GetValue("Chase_Track") ~= "None" and GetValue("Chase_Track") ~= "Off")
+                        if not isChaseRunning then
+                            RestoreGameThemes()
+                        end
+                    else
+                        CheckTrueLMS()
+                    end
+                end,
+                ["CustomSetup"] = function(self)
+                    RunService.Heartbeat:Connect(CheckTrueLMS)
+                    RunService.Heartbeat:Connect(SyncChaseAudio)
+                end
+            },
+            ["LMS_Volume"] = {
+                ["DisplayDescription"] = "Playback master volume",
+                ["DisplayTitle"] = "Playback Volume",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 1.0,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 4.0, ["Step"] = 0.1 }
+            },
+            ["LMS_Loop"] = {
+                ["DisplayDescription"] = "Loop music playback",
+                ["DisplayTitle"] = "Loop Audio",
+                ["LayoutOrder"] = 3,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    if LMS_State.CurrentSound then
+                        LMS_State.CurrentSound.Looped = val
+                    end
+                end
+            },
+            ["LMS_LobbyAudio"] = {
+                ["DisplayDescription"] = "Listen to Survivor LMS music while in Lobby during active match LMS",
+                ["DisplayTitle"] = "Lobby LMS (Survivor)",
+                ["LayoutOrder"] = 4,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false
+            },
+            ["LMS_Rescan"] = {
+                ["DisplayDescription"] = "Fast rescan of LMS audio files from storage",
+                ["DisplayTitle"] = "Rescan LMS Audio",
+                ["LayoutOrder"] = 5,
+                ["Savable"] = false,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    if val then
+                        self.Instance.Value = false
+                        RefreshAudioDropdowns(true)
+                        if typeof(PlaySound) == "function" then PlaySound("select") end
+                    end
+                end
+            },
+            ["LMS_SurvTrack"] = {
+                ["DisplayDescription"] = "Select Survivor audio file (Choose 'Off' to keep original game theme)",
+                ["DisplayTitle"] = "Survivor: Audio File",
+                ["LayoutOrder"] = 6,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "None",
+                ["ExtraData"] = { ["Options"] = initSurv },
+                ["ScriptFunction"] = function(self, val)
+                    if LMS_State.LMSActive then
+                        CheckTrueLMS()
+                    end
+                end
+            },
+            ["LMS_KillerTrack"] = {
+                ["DisplayDescription"] = "Select Killer audio file (Choose 'Off' to keep original game theme)",
+                ["DisplayTitle"] = "Killer: Audio File",
+                ["LayoutOrder"] = 7,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "None",
+                ["ExtraData"] = { ["Options"] = initKill },
+                ["ScriptFunction"] = function(self, val)
+                    if LMS_State.LMSActive then
+                        CheckTrueLMS()
+                    end
+                end
+            }
+        },
+
+        ["Custom_LMS_Visuals"] = {
+            ["TabAttributes"] = {
+                ["DisplayTitle"] = "Custom LMS: Visual Intro & Effects",
+                ["LayoutOrder"] = 101
+            },
+            ["LMS_StartEffect"] = {
+                ["DisplayDescription"] = "Select visual intro effect when LMS begins",
+                ["DisplayTitle"] = "Start Effect",
+                ["LayoutOrder"] = 1,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "None",
+                ["ExtraData"] = { ["Options"] = "None|DOD|Pizza Tower|FNF" }
+            },
+            ["LMS_TestFX"] = {
+                ["DisplayDescription"] = "Preview the selected start intro effect immediately",
+                ["DisplayTitle"] = "Test Start Effect",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = false,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    if val then
+                        self.Instance.Value = false
+                        local fxType = GetValue("LMS_StartEffect") or "None"
+                        local fxFunc = StartVisuals[fxType]
+                        if typeof(fxFunc) == "function" then
+                            task.spawn(fxFunc, true)
+                            if typeof(PlaySound) == "function" then PlaySound("select") end
+                        else
+                            if typeof(ColoredPrint) == "function" then
+                                ColoredPrint("Select a valid Start Effect first!", "warn", Color3.fromRGB(255, 165, 0))
+                            end
+                        end
+                    end
+                end
+            },
+            ["LMS_FXVolume"] = {
+                ["DisplayDescription"] = "Volume level for start visual intro effects",
+                ["DisplayTitle"] = "Start Effect Volume",
+                ["LayoutOrder"] = 3,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 1.0,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 5.0, ["Step"] = 0.1 }
+            },
+            ["LMS_StartDelay"] = {
+                ["DisplayDescription"] = "Delay in seconds before music and visual effect begins",
+                ["DisplayTitle"] = "Trigger Delay (s)",
+                ["LayoutOrder"] = 4,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 0.0,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 10.0, ["Step"] = 0.5 }
+            }
+        },
+
+        ["Custom_Chase"] = {
+            ["TabAttributes"] = {
+                ["DisplayTitle"] = "Custom Chase: Audio Engine (Killer Only)",
+                ["LayoutOrder"] = 102
+            },
+            ["Chase_Active"] = {
+                ["DisplayDescription"] = "Enable custom chase and dynamic terror radius audio (Only functions when you are Killer)",
+                ["DisplayTitle"] = "Enable Chase Engine",
+                ["LayoutOrder"] = 1,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    if not val then
+                        StopChaseAudio(false)
+                        if not LMS_State.LMSActive then
+                            RestoreGameThemes()
+                        end
+                    else
+                        SyncChaseAudio()
+                    end
+                end
+            },
+            ["Chase_Rescan"] = {
+                ["DisplayDescription"] = "Fast rescan of Chase audio files and timing configs",
+                ["DisplayTitle"] = "Rescan Chase Audio",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = false,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    if val then
+                        self.Instance.Value = false
+                        RefreshChaseDropdowns(true)
+                        if typeof(PlaySound) == "function" then PlaySound("select") end
+                    end
+                end
+            },
+            ["Chase_Track"] = {
+                ["DisplayDescription"] = "Select Chase track (automatically loads & saves track-specific settings)",
+                ["DisplayTitle"] = "Chase: Audio File",
+                ["LayoutOrder"] = 3,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "None",
+                ["ExtraData"] = { ["Options"] = initChase },
+                ["ScriptFunction"] = function(self, val)
+                    if val and val ~= "None" and val ~= "Off" then
+                        LoadTrackConfig(val)
+                    end
+                    SyncChaseAudio()
+                end
+            },
+            ["Chase_Volume"] = {
+                ["DisplayDescription"] = "Base volume multiplier for Chase audio",
+                ["DisplayTitle"] = "Chase Volume",
+                ["LayoutOrder"] = 4,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 1.0,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 4.0, ["Step"] = 0.1 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_RangeMultiplier"] = {
+                ["DisplayDescription"] = "Scales all chase/terror distance stages in multiples (e.g. 2.0x doubles all radii)",
+                ["DisplayTitle"] = "Stage Range Multiplier",
+                ["LayoutOrder"] = 5,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 1.0,
+                ["ExtraData"] = { ["MinValue"] = 0.5, ["MaxValue"] = 4.0, ["Step"] = 0.1 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_BonusExpansion"] = {
+                ["DisplayDescription"] = "Extra distance added when Chase absorbs all layers (Total Size + Bonus studs)",
+                ["DisplayTitle"] = "Chase Absorbed Bonus (Studs)",
+                ["LayoutOrder"] = 6,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 25.0,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 80.0, ["Step"] = 1.0 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_OverlapBuffer"] = {
+                ["DisplayDescription"] = "Distance overlap for smooth hysteresis crossfade between layers (studs)",
+                ["DisplayTitle"] = "Layer Overlap Buffer",
+                ["LayoutOrder"] = 7,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 3.57,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 10.0, ["Step"] = 0.05 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_FadeTime"] = {
+                ["DisplayDescription"] = "Duration of smooth volume fade and crossfade between layers (seconds)",
+                ["DisplayTitle"] = "Fade / Crossfade Time",
+                ["LayoutOrder"] = 8,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 0.6,
+                ["ExtraData"] = { ["MinValue"] = 0.1, ["MaxValue"] = 2.0, ["Step"] = 0.05 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_StartDelay"] = {
+                ["DisplayDescription"] = "Delay before chase audio can start playing when round begins (seconds)",
+                ["DisplayTitle"] = "Round Start Delay",
+                ["LayoutOrder"] = 9,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 2.0,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 6.0, ["Step"] = 0.5 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_DistChase"] = {
+                ["DisplayDescription"] = "Base distance threshold for active Chase (Layer 4) in studs",
+                ["DisplayTitle"] = "Base Distance: Chase",
+                ["LayoutOrder"] = 10,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 22,
+                ["ExtraData"] = { ["MinValue"] = 5, ["MaxValue"] = 60, ["Step"] = 1 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_DistLay3"] = {
+                ["DisplayDescription"] = "Base distance threshold for Layer 3 (Close Terror) in studs",
+                ["DisplayTitle"] = "Base Distance: Layer 3",
+                ["LayoutOrder"] = 11,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 40,
+                ["ExtraData"] = { ["MinValue"] = 10, ["MaxValue"] = 90, ["Step"] = 1 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_DistLay2"] = {
+                ["DisplayDescription"] = "Base distance threshold for Layer 2 (Medium Terror) in studs",
+                ["DisplayTitle"] = "Base Distance: Layer 2",
+                ["LayoutOrder"] = 12,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 60,
+                ["ExtraData"] = { ["MinValue"] = 20, ["MaxValue"] = 130, ["Step"] = 1 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_DistLay1"] = {
+                ["DisplayDescription"] = "Base distance threshold for Layer 1 (Far Terror) in studs",
+                ["DisplayTitle"] = "Base Distance: Layer 1",
+                ["LayoutOrder"] = 13,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 85,
+                ["ExtraData"] = { ["MinValue"] = 30, ["MaxValue"] = 180, ["Step"] = 1 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_PlaybackSpeed"] = {
+                ["DisplayDescription"] = "Playback speed and pitch multiplier for Chase audio",
+                ["DisplayTitle"] = "Playback Speed (Pitch)",
+                ["LayoutOrder"] = 14,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 1.0,
+                ["ExtraData"] = { ["MinValue"] = 0.5, ["MaxValue"] = 2.0, ["Step"] = 0.05 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            }
+        },
+
+        ["Fun_Wheel"] = {
+            ["TabAttributes"] = {
+                ["DisplayTitle"] = "Fun: Native Emote Wheel (Killer FE)",
+                ["LayoutOrder"] = 103
+            },
+            ["Fun_UnlockKillerEmotes"] = {
+                ["DisplayDescription"] = "Unlocks and builds the native in-game radial emote wheel for Killers",
+                ["DisplayTitle"] = "Unlock Killer Emotes",
+                ["LayoutOrder"] = 1,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    if val then ForceBuildNativeEmoteMenu() end
+                end
+            },
+            ["Fun_OpenEmoteWheel"] = {
+                ["DisplayDescription"] = "Instantly opens or closes the native in-game radial emote wheel",
+                ["DisplayTitle"] = "Open Emote Wheel",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = false,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    if val then
+                        self.Instance.Value = false
+                        ToggleNativeEmoteWheel()
+                    end
+                end
+            },
+            ["Fun_EmoteWalk"] = {
+                ["DisplayDescription"] = "Allows walking and sprinting while emoting without canceling the animation",
+                ["DisplayTitle"] = "Emote Walk",
+                ["LayoutOrder"] = 3,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true
+            },
+            ["Fun_ParryAnimCancel"] = {
+                ["DisplayDescription"] = "1337 Block",
+                ["DisplayTitle"] = '<stroke thickness="0.7">1337</stroke> Parry Anim Cancel',
+                ["LayoutOrder"] = 4,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["AnimConn"] = nil,
+                ["HookAnimator"] = function(self, char)
+                    if self.AnimConn then self.AnimConn:Disconnect(); self.AnimConn = nil end
+                    local hum = char and (char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 3))
+                    local animator = hum and (hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 3))
+                    if not animator then return end
+
+                    local function isBlockAnim(track)
+                        if not track or not track.Animation then return false end
+                        local tName = (track.Name or ""):lower()
+                        local aName = (track.Animation.Name or ""):lower()
+
+                        if tName:find("block") or aName:find("block") or tName:find("parry") or aName:find("parry") or tName:find("shield") or aName:find("guard") then
+                            return true
+                        end
+
+                        local spd = char:FindFirstChild("SpeedMultipliers")
+                        if spd and spd:FindFirstChild("GuestBlocking") then
+                            local moveKw = {"walk", "run", "idle", "sprint", "fall", "jump"}
+                            for _, kw in ipairs(moveKw) do
+                                if tName:find(kw) or aName:find(kw) then return false end
+                            end
+                            return true
+                        end
+                        return false
+                    end
+
+                    self.AnimConn = animator.AnimationPlayed:Connect(function(track)
+                        if not GetValue("Fun_ParryAnimCancel") then return end
+                        if not char or not char.Name:lower():find("guest") then return end
+
+                        if isBlockAnim(track) then
+                            track:Stop(0)
+                            local blockGuard
+                            blockGuard = track:GetPropertyChangedSignal("IsPlaying"):Connect(function()
+                                if track.IsPlaying then track:Stop(0) end
+                            end)
+                            task.delay((track.Length and track.Length > 0.05) and track.Length or 1.2, function()
+                                if blockGuard then blockGuard:Disconnect() end
+                            end)
+                        end
+                    end)
+                end,
+                ["CharacterAdded"] = function(self)
+                    task.delay(0.5, function()
+                        if LocalPlayer.Character then self:HookAnimator(LocalPlayer.Character) end
+                    end)
+                end,
+                ["CustomSetup"] = function(self)
+                    self.DisplayTitle = self.DisplayTitle:gsub("1337", RichTextGradientColor("1337", {Color3.fromRGB(16, 47, 185), Color3.fromRGB(146, 202, 93)}))
+                    if LocalPlayer.Character then self:HookAnimator(LocalPlayer.Character) end
+                end
+            }
+        },
+
+        ["Fun_Settings"] = {
+            ["TabAttributes"] = {
+                ["DisplayTitle"] = "Fun: Game Emote Settings",
+                ["LayoutOrder"] = 104
+            },
+            ["Fun_EmoteCamera"] = {
+                ["DisplayDescription"] = "The body part that the camera locks onto during an emote",
+                ["DisplayTitle"] = "Emote Camera",
+                ["LayoutOrder"] = 1,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "None",
+                ["ExtraData"] = { ["Options"] = "None|Head|Torso" },
+                ["ScriptFunction"] = function(self, val)
+                    SetEmoteSetting("EmoteCameraSubject", val)
+                end,
+                ["CustomSetup"] = function(self)
+                    BindEmoteSetting("EmoteCameraSubject", self.Instance)
+                end
+            },
+            ["Fun_EmoteVFXDisabled"] = {
+                ["DisplayDescription"] = "Disables most of the visual effects for emotes",
+                ["DisplayTitle"] = "Emote VFX Disabled",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    SetEmoteSetting("EmoteVFXDisabled", val)
+                end,
+                ["CustomSetup"] = function(self)
+                    BindEmoteSetting("EmoteVFXDisabled", self.Instance)
+                end
+            },
+            ["Fun_EmoteSFXDisabled"] = {
+                ["DisplayDescription"] = "Disables emote sound effects and ambience",
+                ["DisplayTitle"] = "Emote SFX Disabled",
+                ["LayoutOrder"] = 3,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    SetEmoteSetting("EmoteSFXDisabled", val)
+                end,
+                ["CustomSetup"] = function(self)
+                    BindEmoteSetting("EmoteSFXDisabled", self.Instance)
+                end
+            },
+            ["Fun_EmoteHandsDisabled"] = {
+                ["DisplayDescription"] = "Hides the hands in certain emotes",
+                ["DisplayTitle"] = "Emote Hands Disabled",
+                ["LayoutOrder"] = 4,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    SetEmoteSetting("EmoteHandsDisabled", val)
+                end,
+                ["CustomSetup"] = function(self)
+                    BindEmoteSetting("EmoteHandsDisabled", self.Instance)
+                end
+            },
+            ["Fun_PlayerEmotesAffected"] = {
+                ["DisplayDescription"] = "Whether or not your own emotes will be affected by your preferred emote settings",
+                ["DisplayTitle"] = "Personal Emotes Affected",
+                ["LayoutOrder"] = 5,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    SetEmoteSetting("PlayerEmotesAffected", val)
+                end,
+                ["CustomSetup"] = function(self)
+                    BindEmoteSetting("PlayerEmotesAffected", self.Instance)
+                end
+            },
+            ["Fun_EmoteSyncing"] = {
+                ["DisplayDescription"] = "Toggles automatic emote syncing with nearby players",
+                ["DisplayTitle"] = "Emote Syncing",
+                ["LayoutOrder"] = 6,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    SetEmoteSetting("EmoteSyncing", val)
+                end,
+                ["CustomSetup"] = function(self)
+                    BindEmoteSetting("EmoteSyncing", self.Instance)
+                end
+            }
+        }
+    }
+
+    HandleUIFeatures("Custom_LMS", AddonsPackage["Custom_LMS"])
+    HandleUIFeatures("Custom_LMS_Visuals", AddonsPackage["Custom_LMS_Visuals"])
+    HandleUIFeatures("Custom_Chase", AddonsPackage["Custom_Chase"])
+    HandleUIFeatures("Fun_Wheel", AddonsPackage["Fun_Wheel"])
+    HandleUIFeatures("Fun_Settings", AddonsPackage["Fun_Settings"])
+    HandleUIFeatures("Fun_Credits", AddonsPackage["Fun_Credits"])
+
+    task.spawn(function()
+        task.wait(0.2)
+        RefreshAudioDropdowns(false)
+        task.wait(1.5)
+        RefreshAudioDropdowns(false)
+    end)
+    task.wait(0.1)
+
+    -- [ Tab Rail & Canvas Dynamic Length Setup ]
+    local TWEEN = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local HOVER_TWEEN = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local CONE_OUT = TweenInfo.new(0.32, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+    local CONE_IN = TweenInfo.new(0.22, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+
+    local SettingsContainer = PlusMenu:WaitForChild("SettingsContainer", 30)
+    SettingsContainer.ClipsDescendants = false
+
+    local ContentsScrolling = SettingsContainer:WaitForChild("Contents", 30)
+    ContentsScrolling.ClipsDescendants = true
+    ContentsScrolling.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+    local CanvasAutoSpacer = ContentsScrolling:FindFirstChild("DropdownCanvasSpacer")
+    if not CanvasAutoSpacer then
+        CanvasAutoSpacer = Instance.new("Frame")
+        CanvasAutoSpacer.Name = "DropdownCanvasSpacer"
+        CanvasAutoSpacer.BackgroundTransparency = 1
+        CanvasAutoSpacer.Size = UDim2.new(1, 0, 0, 0)
+        CanvasAutoSpacer.LayoutOrder = 9999999
+        CanvasAutoSpacer.ZIndex = 0
+        CanvasAutoSpacer.Parent = ContentsScrolling
+    end
+
+    local function HookDropdownExpansion(frame)
+        local options = frame:FindFirstChild("Options", true)
+        if not options or options:GetAttribute("FPlus_ExpandHook") then return end
+        options:SetAttribute("FPlus_ExpandHook", true)
+
+        local row = frame
+        while row and row.Parent and row.Parent ~= ContentsScrolling do
+            row = row.Parent
+        end
+        if not (row and row:IsA("GuiObject")) then return end
+
+        local defaultRowZ = row.LayoutOrder > 0 and (50000 - (row.LayoutOrder * 2)) or row.ZIndex
+        local defaultFrameZ = frame.ZIndex
+        local defaultOptionsZ = options.ZIndex
+
+        options:GetPropertyChangedSignal("Visible"):Connect(function()
+            if options.Visible then
+                row.ZIndex = 60000
+                frame.ZIndex = 60001
+                options.ZIndex = 60002
+
+                task.wait(0.04)
+                if not options.Visible then return end
+
+                local optBottom = options.AbsolutePosition.Y + options.AbsoluteSize.Y
+                local contBottom = ContentsScrolling.AbsolutePosition.Y + ContentsScrolling.AbsoluteSize.Y
+                local overflow = optBottom - contBottom
+
+                if overflow > 0 then
+                    local extraSpace = overflow + 35
+                    TweenService:Create(CanvasAutoSpacer, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                        Size = UDim2.new(1, 0, 0, extraSpace)
+                    }):Play()
+
+                    local targetScrollY = ContentsScrolling.CanvasPosition.Y + overflow + 25
+                    TweenService:Create(ContentsScrolling, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                        CanvasPosition = Vector2.new(0, targetScrollY)
+                    }):Play()
+                else
+                    CanvasAutoSpacer.Size = UDim2.new(1, 0, 0, 0)
+                end
+            else
+                row.ZIndex = defaultRowZ
+                frame.ZIndex = defaultFrameZ
+                options.ZIndex = defaultOptionsZ
+
+                TweenService:Create(CanvasAutoSpacer, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                    Size = UDim2.new(1, 0, 0, 0)
+                }):Play()
+            end
+        end)
+    end
+
+    ContentsScrolling.DescendantAdded:Connect(function(child)
+        if child.Name == "DropdownFrame" then
+            HookDropdownExpansion(child)
+        end
+    end)
+    for _, d in ipairs(ContentsScrolling:GetDescendants()) do
+        if d.Name == "DropdownFrame" then
+            HookDropdownExpansion(d)
+        end
+    end
+
+    if SettingsContainer:FindFirstChild("PlusTabRail") then
+        SettingsContainer.PlusTabRail:Destroy()
+    end
+
+    local TabRail = Instance.new("Frame")
+    TabRail.Name = "PlusTabRail"
+    TabRail.AnchorPoint = Vector2.new(1, 0.5)
+    TabRail.Position = UDim2.new(0, -8, 0.5, 0)
+    TabRail.Size = UDim2.new(0, 76, 0, 0)
+    TabRail.BackgroundTransparency = 1
+    TabRail.ClipsDescendants = false
+    TabRail.ZIndex = PlusMenu.ZIndex + 25
+    TabRail.Visible = false
+    TabRail.Parent = SettingsContainer
+
+    local ResponsiveScale = Instance.new("UIScale")
+    ResponsiveScale.Name = "ResponsiveScale"
+    ResponsiveScale.Scale = 1
+    ResponsiveScale.Parent = TabRail
+
+    local function RecalculateWindowScale()
+        local h = MainUI.AbsoluteSize.Y
+        if h > 50 then
+            ResponsiveScale.Scale = math.clamp(h / 1080, 0.33, 1.25)
+        end
+    end
+    MainUI:GetPropertyChangedSignal("AbsoluteSize"):Connect(RecalculateWindowScale)
+    RecalculateWindowScale()
+
+    local TABS = {
+        { Key = "Main",  Title = "Plus",  Icon = "rbxassetid://118860705115878", Order = 1 },
+        { Key = "Music", Title = "Music", Icon = "rbxassetid://10734905958",     Order = 2 },
+        { Key = "Fun",   Title = "Fun",   Icon = "rbxassetid://10734918735",     Order = 3 },
+    }
+
+    local ButtonRefs = {}
+    local CurrentTab = "Main"
+    local BTN_SIZE = 76
+    local STEP = 105
+    local TOTAL_COUNT = #TABS
+    local SavedOriginalVisibility = {}
+    local ItemToTabMap = {}
+
+    local function RebuildTabCache()
+        table.clear(ItemToTabMap)
+        for _, folder in ipairs(PlusFolderSettings:GetChildren()) do
+            if folder:IsA("Folder") then
+                for _, setting in ipairs(folder:GetChildren()) do
+                    ItemToTabMap[setting.Name] = folder.Name
+                end
+            end
+        end
+    end
+    RebuildTabCache()
+    PlusFolderSettings.DescendantAdded:Connect(RebuildTabCache)
+
+    local function FastGetItemTab(item)
+        if item:FindFirstChild("Title") and not item:FindFirstChild("SettingName") then
+            return item.Name
+        end
+        return ItemToTabMap[item.Name]
+    end
+
+    local function SetTabVisual(btnRef, active)
+        btnRef.IsActive = active
+        local btn = btnRef.Button
+        local bg = btn:FindFirstChild("BG")
+        local highlight = btn:FindFirstChild("Highlight")
+        local line = btn:FindFirstChild("Line")
+        local grungeMain = btn:FindFirstChild("GrungeMain")
+        local grunge = btn:FindFirstChild("Grunge")
+        local icon = btn:FindFirstChild("Icon")
+        local textFrame = btn:FindFirstChild("Text")
+        local textBG = textFrame and textFrame:FindFirstChild("TextBG")
+        local name = textFrame and textFrame:FindFirstChild("Name")
+
+        if bg then TweenService:Create(bg, TWEEN, {ImageColor3 = active and Color3.fromRGB(0, 170, 127) or Color3.fromRGB(0, 17, 13)}):Play() end
+        if highlight then TweenService:Create(highlight, TWEEN, {ImageColor3 = active and Color3.fromRGB(0, 37, 24) or Color3.fromRGB(0, 170, 127), ImageTransparency = active and 0 or 1}):Play() end
+        if line then TweenService:Create(line, TWEEN, {ImageColor3 = active and Color3.fromRGB(0, 37, 24) or Color3.fromRGB(0, 170, 127)}):Play() end
+        if grungeMain then TweenService:Create(grungeMain, TWEEN, {ImageColor3 = active and Color3.fromRGB(0, 37, 24) or Color3.fromRGB(80, 80, 80)}):Play() end
+        if grunge then TweenService:Create(grunge, TWEEN, {ImageColor3 = active and Color3.fromRGB(0, 229, 171) or Color3.fromRGB(0, 37, 24), ImageTransparency = active and 0 or 0.2}):Play() end
+        if icon then TweenService:Create(icon, TWEEN, {ImageColor3 = active and Color3.fromRGB(0, 37, 24) or Color3.fromRGB(0, 170, 127)}):Play() end
+        if textFrame then
+            TweenService:Create(textFrame, TWEEN, {
+                BackgroundColor3 = active and Color3.fromRGB(0, 229, 171) or Color3.fromRGB(0, 17, 13),
+                BackgroundTransparency = active and 0 or 0.5
+            }):Play()
+        end
+        if textBG then
+            TweenService:Create(textBG, TWEEN, {
+                ImageColor3 = active and Color3.fromRGB(0, 229, 171) or Color3.fromRGB(0, 17, 13),
+                ImageTransparency = active and 0 or 0.3
+            }):Play()
+        end
+        if name then TweenService:Create(name, TWEEN, {TextColor3 = active and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(0, 170, 127)}):Play() end
+    end
+
+    local function SwitchActiveTab(tabKey)
+        CurrentTab = tabKey
+        for key, ref in pairs(ButtonRefs) do
+            SetTabVisual(ref, key == tabKey)
+        end
+
+        TweenService:Create(CanvasAutoSpacer, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            Size = UDim2.new(1, 0, 0, 0)
+        }):Play()
+
+        for _, item in ipairs(ContentsScrolling:GetChildren()) do
+            if item:IsA("GuiObject") and not item:IsA("UIListLayout") and not item:IsA("UIPadding") and item ~= CanvasAutoSpacer then
+                local ownerTab = FastGetItemTab(item)
+                local isMusicItem = (ownerTab == "Custom_LMS" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase")
+                local isFunItem = (ownerTab == "Fun_Wheel" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
+
+                if tabKey == "Main" then
+                    if isMusicItem or isFunItem then
+                        item.Visible = false
+                    else
+                        if SavedOriginalVisibility[item] ~= nil then
+                            item.Visible = SavedOriginalVisibility[item]
+                        end
+                    end
+                elseif tabKey == "Music" then
+                    if isMusicItem then
+                        item.Visible = true
+                    else
+                        if SavedOriginalVisibility[item] == nil then
+                            SavedOriginalVisibility[item] = item.Visible
+                        end
+                        item.Visible = false
+                    end
+                elseif tabKey == "Fun" then
+                    if isFunItem then
+                        item.Visible = true
+                    else
+                        if SavedOriginalVisibility[item] == nil then
+                            SavedOriginalVisibility[item] = item.Visible
+                        end
+                        item.Visible = false
+                    end
+                end
+            end
+        end
+
+        ContentsScrolling.CanvasPosition = Vector2.zero
+    end
+
+    local function AnimateButtonFade(ref, targetState)
+        local btn = ref.Button
+        local dur = targetState and 0.25 or 0.18
+        local tInfo = TweenInfo.new(dur, Enum.EasingStyle.Quad, targetState and Enum.EasingDirection.Out or Enum.EasingDirection.In)
+
+        TweenService:Create(btn, tInfo, { BackgroundTransparency = targetState and 0.45 or 1 }):Play()
+        if ref.BG then TweenService:Create(ref.BG, tInfo, { ImageTransparency = targetState and 0 or 1 }):Play() end
+        if ref.Shadow then TweenService:Create(ref.Shadow, tInfo, { ImageTransparency = targetState and 0.3 or 1 }):Play() end
+        if ref.Texture then TweenService:Create(ref.Texture, tInfo, { ImageTransparency = targetState and 0.33 or 1 }):Play() end
+        if ref.Line then TweenService:Create(ref.Line, tInfo, { ImageTransparency = targetState and 0 or 1 }):Play() end
+        if ref.Highlight then TweenService:Create(ref.Highlight, tInfo, { ImageTransparency = (targetState and ref.IsActive) and 0 or 1 }):Play() end
+        if ref.GrungeMain then TweenService:Create(ref.GrungeMain, tInfo, { ImageTransparency = targetState and 0 or 1 }):Play() end
+        if ref.Grunge then TweenService:Create(ref.Grunge, tInfo, { ImageTransparency = targetState and 0.2 or 1 }):Play() end
+        if ref.Icon then TweenService:Create(ref.Icon, tInfo, { ImageTransparency = targetState and 0 or 1 }):Play() end
+        if ref.TextFrame then TweenService:Create(ref.TextFrame, tInfo, { BackgroundTransparency = targetState and (ref.IsActive and 0 or 0.5) or 1 }):Play() end
+        if ref.TextBG then TweenService:Create(ref.TextBG, tInfo, { ImageTransparency = targetState and 0.3 or 1 }):Play() end
+        if ref.NameLabel then TweenService:Create(ref.NameLabel, tInfo, { TextTransparency = targetState and 0 or 1 }):Play() end
+    end
+
+    for idx, data in ipairs(TABS) do
+        local TabItem = SidePlusButton:Clone()
+        TabItem.Name = data.Key .. "Tab"
+        TabItem.Size = UDim2.fromOffset(BTN_SIZE, BTN_SIZE)
+        TabItem.AnchorPoint = Vector2.new(0.5, 0.5)
+        TabItem.Position = UDim2.new(0.5, 45, 0, 0)
+        TabItem.LayoutOrder = data.Order
+        TabItem.ClipsDescendants = false
+        TabItem.Visible = true
+
+        for _, bad in ipairs(TabItem:GetChildren()) do
+            if bad.Name == "DropdownArrow" or bad.Name == "PulloutHolder" or bad.Name == "Arrow" or bad.Name:find("Inverted") then
+                bad:Destroy()
+            end
+        end
+
+        local ButtonObj = TabItem:FindFirstChild("Button") or TabItem
+        ButtonObj.ClipsDescendants = false
+
+        for _, bad in ipairs(ButtonObj:GetChildren()) do
+            if bad.Name == "DropdownArrow" or bad.Name == "PulloutHolder" or bad.Name == "Arrow" or bad.Name:find("Inverted") then
+                bad:Destroy()
+            end
+        end
+
+        local Scale = ButtonObj:FindFirstChildOfClass("UIScale") or Instance.new("UIScale", ButtonObj)
+        Scale.Scale = 0.05
+
+        local Icon = ButtonObj:FindFirstChild("Icon")
+        if Icon then
+            Icon.Image = data.Icon
+            Icon.Size = UDim2.fromScale(0.72, 0.72)
+            Icon.Position = UDim2.fromScale(0.5, 0.48)
+            Icon.AnchorPoint = Vector2.new(0.5, 0.5)
+            Icon.ZIndex = 15
+            Icon.ImageColor3 = Color3.fromRGB(0, 170, 127)
+        end
+
+        local TextFrame = ButtonObj:FindFirstChild("Text")
+        local TextBG, NameLabel
+        if TextFrame then
+            TextFrame.Size = UDim2.new(0.88, 0, 0, 15)
+            TextFrame.AnchorPoint = Vector2.new(0.5, 1)
+            TextFrame.Position = UDim2.new(0.5, 0, 1, 4)
+            TextFrame.ZIndex = 25
+            TextFrame.BackgroundColor3 = Color3.fromRGB(0, 17, 13)
+            TextFrame.BackgroundTransparency = 0.5
+            TextFrame.BorderSizePixel = 0
+
+            TextBG = TextFrame:FindFirstChild("TextBG") or Instance.new("ImageLabel")
+            TextBG.Name = "TextBG"
+            TextBG.Image = "rbxassetid://83468530120409"
+            TextBG.Size = UDim2.fromScale(1, 1)
+            TextBG.BackgroundTransparency = 1
+            TextBG.ImageColor3 = Color3.fromRGB(0, 17, 13)
+            TextBG.ImageTransparency = 0.3
+            TextBG.ZIndex = 26
+            TextBG.Parent = TextFrame
+
+            NameLabel = TextFrame:FindFirstChild("Name")
+            if NameLabel then
+                NameLabel.Text = data.Title
+                NameLabel.TextColor3 = Color3.fromRGB(0, 170, 127)
+                NameLabel.TextScaled = true
+                NameLabel.Size = UDim2.fromScale(1, 1)
+                NameLabel.Position = UDim2.fromScale(0.5, 0.5)
+                NameLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+                NameLabel.ZIndex = 27
+            end
+        end
+
+        ButtonObj.MouseEnter:Connect(function()
+            TweenService:Create(Scale, HOVER_TWEEN, {Scale = 1.05}):Play()
+            if typeof(PlaySound) == "function" then PlaySound("hover") end
+        end)
+        ButtonObj.MouseLeave:Connect(function()
+            TweenService:Create(Scale, HOVER_TWEEN, {Scale = 1.0}):Play()
+            if typeof(PlaySound) == "function" then PlaySound("hoverEnd") end
+        end)
+        ButtonObj.MouseButton1Click:Connect(function()
+            if typeof(PlaySound) == "function" then PlaySound("select") end
+            SwitchActiveTab(data.Key)
+        end)
+
+        TabItem.Parent = TabRail
+        local ref = {
+            Item = TabItem,
+            Button = ButtonObj,
+            Scale = Scale,
+            BG = ButtonObj:FindFirstChild("BG"),
+            Shadow = ButtonObj:FindFirstChild("Shadow"),
+            Texture = ButtonObj:FindFirstChild("Texture"),
+            Line = ButtonObj:FindFirstChild("Line"),
+            Highlight = ButtonObj:FindFirstChild("Highlight"),
+            GrungeMain = ButtonObj:FindFirstChild("GrungeMain"),
+            Grunge = ButtonObj:FindFirstChild("Grunge"),
+            Icon = Icon,
+            TextFrame = TextFrame,
+            TextBG = TextBG,
+            NameLabel = NameLabel,
+            Index = idx,
+            IsActive = (data.Key == "Main")
+        }
+        ButtonRefs[data.Key] = ref
+        AnimateButtonFade(ref, false)
+    end
+
+    local IsRailOpen = false
+
+    local function OpenRailAnimation()
+        if IsRailOpen then return end
+        IsRailOpen = true
+        TabRail.Visible = true
+
+        for _, data in ipairs(TABS) do
+            local ref = ButtonRefs[data.Key]
+            if ref then
+                ref.Item.Position = UDim2.new(0.5, 45, 0, 0)
+                local targetOffset = (ref.Index - (TOTAL_COUNT + 1) / 2) * STEP
+                TweenService:Create(ref.Item, CONE_OUT, { Position = UDim2.new(0.5, 0, 0, targetOffset) }):Play()
+                TweenService:Create(ref.Scale, CONE_OUT, { Scale = 1 }):Play()
+                AnimateButtonFade(ref, true)
+            end
+        end
+
+        SwitchActiveTab(CurrentTab)
+    end
+
+    local function CloseRailAnimation()
+        if not IsRailOpen then return end
+        IsRailOpen = false
+
+        for _, data in ipairs(TABS) do
+            local ref = ButtonRefs[data.Key]
+            if ref then
+                TweenService:Create(ref.Item, CONE_IN, { Position = UDim2.new(0.5, 45, 0, 0) }):Play()
+                TweenService:Create(ref.Scale, CONE_IN, { Scale = 0.05 }):Play()
+                AnimateButtonFade(ref, false)
+            end
+        end
+
+        task.delay(0.23, function()
+            if not IsRailOpen then TabRail.Visible = false end
+        end)
+    end
+
+    local function SyncRailState()
+        local isShown = PlusMenu.Visible and (PlusMenu:GetAttribute("Visible") ~= false)
+        if isShown and not IsRailOpen then
+            OpenRailAnimation()
+        elseif not isShown and IsRailOpen then
+            CloseRailAnimation()
+        end
+    end
+
+    PlusMenu:GetPropertyChangedSignal("Visible"):Connect(function()
+        SyncRailState()
+    end)
+
+    task.delay(0.3, function()
+        for _, item in ipairs(ContentsScrolling:GetChildren()) do
+            if item:IsA("GuiObject") and not item:IsA("UIListLayout") and not item:IsA("UIPadding") and item ~= CanvasAutoSpacer then
+                local ownerTab = FastGetItemTab(item)
+                local isAddonItem = (ownerTab == "Custom_LMS" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase" or ownerTab == "Fun_Wheel" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
+                if not isAddonItem and SavedOriginalVisibility[item] == nil then
+                    SavedOriginalVisibility[item] = item.Visible
+                end
+            end
+        end
+        if PlusMenu.Visible and (PlusMenu:GetAttribute("Visible") ~= false) then
+            OpenRailAnimation()
+        end
+    end)
+end)
