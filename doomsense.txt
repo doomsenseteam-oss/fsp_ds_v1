@@ -239,6 +239,172 @@ task.spawn(function()
         end)
     end
 
+    -- [ Stamina Stopper: Native Input & Button Release Controller ]
+    local ContextActionService = game:GetService("ContextActionService")
+    local VirtualInputManager = game:GetService("VirtualInputManager")
+    local StaminaLockEndTime = 0
+    local IsSprintLocked = false
+
+    local function GetSprintKeyCodes()
+        local keys = { Enum.KeyCode.LeftShift, Enum.KeyCode.RightShift, Enum.KeyCode.ButtonL3 }
+        local keybinds = PlayerData and PlayerData:FindFirstChild("Settings") and PlayerData.Settings:FindFirstChild("Keybinds")
+        local customKey = keybinds and keybinds:FindFirstChild("Sprint") and keybinds.Sprint.Value
+        if customKey and Enum.KeyCode[customKey] then
+            table.insert(keys, Enum.KeyCode[customKey])
+        end
+        return keys
+    end
+
+    local function ReleaseSprintKeys()
+        local keys = GetSprintKeyCodes()
+        for _, k in ipairs(keys) do
+            pcall(function()
+                VirtualInputManager:SendKeyEvent(false, k, false, game)
+            end)
+        end
+    end
+
+    local function ReleaseMobileSprintButton()
+        local searchRoots = {
+            PlayerGui:FindFirstChild("TemporaryUI"),
+            PlayerGui:FindFirstChild("MainUI"),
+            PlayerGui:FindFirstChild("TouchGui")
+        }
+        for _, root in ipairs(searchRoots) do
+            if root then
+                for _, btn in ipairs(root:GetDescendants()) do
+                    if (btn:IsA("ImageButton") or btn:IsA("TextButton")) and (btn.Name:lower():find("sprint") or btn.Name:lower():find("run")) then
+                        pcall(function()
+                            if typeof(firesignal) == "function" then
+                                firesignal(btn.MouseButton1Up)
+                                firesignal(btn.TouchEnded)
+                            end
+                        end)
+                    end
+                end
+            end
+        end
+    end
+
+    local function SetMobileSprintInteractable(state)
+        local searchRoots = {
+            PlayerGui:FindFirstChild("TemporaryUI"),
+            PlayerGui:FindFirstChild("MainUI"),
+            PlayerGui:FindFirstChild("TouchGui")
+        }
+        for _, root in ipairs(searchRoots) do
+            if root then
+                for _, btn in ipairs(root:GetDescendants()) do
+                    if (btn:IsA("ImageButton") or btn:IsA("TextButton")) and (btn.Name:lower():find("sprint") or btn.Name:lower():find("run")) then
+                        pcall(function()
+                            btn.Active = state
+                            if btn:IsA("GuiButton") and typeof(btn.Interactable) == "boolean" then
+                                btn.Interactable = state
+                            end
+                        end)
+                    end
+                end
+            end
+        end
+    end
+
+    local function ReleaseNativeSprint()
+        if MainModule then
+            pcall(function()
+                if typeof(MainModule.StopSprinting) == "function" then MainModule:StopSprinting() end
+                if typeof(MainModule.SetSprinting) == "function" then MainModule:SetSprinting(false) end
+                if typeof(MainModule.ToggleSprint) == "function" then MainModule:ToggleSprint(false) end
+                if typeof(MainModule.Stop) == "function" then MainModule:Stop() end
+                if typeof(MainModule.Sprint) == "function" then MainModule:Sprint(false) end
+                MainModule.IsSprinting = false
+            end)
+        end
+    end
+
+    local function TriggerSprintRelease()
+        ReleaseSprintKeys()
+        ReleaseMobileSprintButton()
+        ReleaseNativeSprint()
+    end
+
+    local function LockSprintInputs()
+        local keys = GetSprintKeyCodes()
+        ContextActionService:BindActionAtPriority(
+            "FPlus_StaminaStopperLock",
+            function() return Enum.ContextActionResult.Sink end,
+            false,
+            100000,
+            table.unpack(keys)
+        )
+        SetMobileSprintInteractable(false)
+    end
+
+    local function UnlockSprintInputs()
+        ContextActionService:UnbindAction("FPlus_StaminaStopperLock")
+        SetMobileSprintInteractable(true)
+    end
+
+    RunService.Heartbeat:Connect(function()
+        if not GetValue("Fun_StaminaStopper") then
+            if IsSprintLocked then
+                IsSprintLocked = false
+                UnlockSprintInputs()
+            end
+            return
+        end
+
+        local char = LocalPlayer.Character
+        if not char or char:GetAttribute("Dead") == true then
+            if IsSprintLocked then
+                IsSprintLocked = false
+                UnlockSprintInputs()
+            end
+            return
+        end
+
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then
+            if IsSprintLocked then
+                IsSprintLocked = false
+                UnlockSprintInputs()
+            end
+            return
+        end
+
+        local curStamina = MainModule and typeof(MainModule.Stamina) == "number" and MainModule.Stamina
+        local threshold = tonumber(GetValue("Fun_StaminaThreshold")) or 15
+        local lockDuration = tonumber(GetValue("Fun_StaminaLockDuration")) or 2.0
+
+        if IsSprintLocked then
+            if os.clock() >= StaminaLockEndTime then
+                IsSprintLocked = false
+                UnlockSprintInputs()
+            end
+            return
+        end
+
+        if curStamina and curStamina <= threshold then
+            local spd = char:FindFirstChild("SpeedMultipliers")
+            local isRunning = (MainModule and MainModule.IsSprinting == true)
+                or (spd and spd:FindFirstChild("Sprinting") ~= nil)
+                or (hum.MoveDirection.Magnitude > 0 and (char:GetAttribute("Sprinting") == true or char:GetAttribute("IsSprinting") == true))
+
+            if isRunning then
+                IsSprintLocked = true
+                StaminaLockEndTime = os.clock() + lockDuration
+                TriggerSprintRelease()
+                LockSprintInputs()
+            end
+        end
+    end)
+
+    LocalPlayer.CharacterAdded:Connect(function()
+        if IsSprintLocked then
+            IsSprintLocked = false
+            UnlockSprintInputs()
+        end
+    end)
+
     -- [ ChaseThemes Game Hook ]
     local GameChaseThemes = nil
     local function GetChaseModule()
@@ -1696,8 +1862,757 @@ task.spawn(function()
         RefreshAudioDropdowns(notify)
     end
 
+    -- [ Night Mode Engine: Ported & Enhanced from DOOMSENSE v2.4 ]
+    local NightColorPalettes = {
+        Ambient = {
+            ["Navy Night"]   = Color3.fromRGB(50, 50, 80),
+            ["Pitch Black"]  = Color3.fromRGB(0, 0, 0),
+            ["Blood Red"]    = Color3.fromRGB(80, 20, 20),
+            ["Dark Purple"]  = Color3.fromRGB(60, 25, 80),
+            ["Cold Blue"]    = Color3.fromRGB(20, 45, 85),
+            ["Ashen Grey"]   = Color3.fromRGB(65, 65, 65),
+        },
+        Outdoor = {
+            ["Pitch Black"]   = Color3.fromRGB(0, 0, 0),
+            ["Midnight Blue"] = Color3.fromRGB(15, 20, 40),
+            ["Blood Tint"]    = Color3.fromRGB(45, 10, 10),
+            ["Dark Sepia"]    = Color3.fromRGB(35, 25, 15),
+            ["Muted Grey"]    = Color3.fromRGB(40, 40, 40),
+        },
+        Fog = {
+            ["Navy Blue"]       = Color3.fromRGB(50, 50, 80),
+            ["Abyssal Black"]   = Color3.fromRGB(5, 5, 10),
+            ["Blood Crimson"]   = Color3.fromRGB(90, 15, 15),
+            ["Spectral Purple"] = Color3.fromRGB(70, 20, 95),
+            ["Toxic Green"]     = Color3.fromRGB(20, 70, 35),
+            ["Misty Grey"]      = Color3.fromRGB(75, 75, 85),
+        },
+        Lights = {
+            ["Pure White"]  = Color3.fromRGB(255, 255, 255),
+            ["Warm Torch"]  = Color3.fromRGB(255, 185, 110),
+            ["Cold Cyan"]   = Color3.fromRGB(130, 225, 255),
+            ["Blood Red"]   = Color3.fromRGB(255, 60, 60),
+            ["Pale Violet"] = Color3.fromRGB(205, 140, 255),
+            ["Lime Glow"]   = Color3.fromRGB(150, 255, 130),
+        },
+        Time = {
+            ["Midnight (00:00)"]   = "00:00:00",
+            ["Deep Night (22:00)"] = "22:00:00",
+            ["Blood Moon (03:00)"] = "03:00:00",
+            ["Eclipse (19:00)"]    = "19:00:00",
+            ["Pitch Dark (01:00)"] = "01:00:00",
+        }
+    }
+
+    local NightOriginal = {
+        Saved = false,
+        TimeOfDay = nil,
+        Ambient = nil,
+        OutdoorAmbient = nil,
+        Brightness = nil,
+        FogColor = nil,
+        FogStart = nil,
+        FogEnd = nil,
+        AtmosphereCreated = false,
+        Atmosphere = nil,
+    }
+    local NightLightCache = {}
+    local IsNightApplyingInternal = false
+
+    local function SaveOriginalLighting()
+        if NightOriginal.Saved then return end
+        NightOriginal.Saved = true
+        NightOriginal.TimeOfDay = Lighting.TimeOfDay
+        NightOriginal.Ambient = Lighting.Ambient
+        NightOriginal.OutdoorAmbient = Lighting.OutdoorAmbient
+        NightOriginal.Brightness = Lighting.Brightness
+        NightOriginal.FogColor = Lighting.FogColor
+        NightOriginal.FogStart = Lighting.FogStart
+        NightOriginal.FogEnd = Lighting.FogEnd
+
+        local atmos = Lighting:FindFirstChildOfClass("Atmosphere")
+        if atmos and atmos.Name ~= "Doomsense_NightAtmosphere" then
+            NightOriginal.Atmosphere = {
+                Density = atmos.Density,
+                Color = atmos.Color,
+                Decay = atmos.Decay,
+                Offset = atmos.Offset,
+                Glare = atmos.Glare,
+                Haze = atmos.Haze,
+            }
+            NightOriginal.AtmosphereCreated = false
+        else
+            NightOriginal.Atmosphere = nil
+            NightOriginal.AtmosphereCreated = false
+        end
+    end
+
+    local function RestoreNightWorldLights()
+        for light, orig in pairs(NightLightCache) do
+            if light and light.Parent then
+                pcall(function()
+                    light.Color = orig.Color
+                    light.Brightness = orig.Brightness
+                    light.Range = orig.Range
+                end)
+            end
+        end
+        table.clear(NightLightCache)
+    end
+
+    local function UpdateNightWorldLights()
+        if not GetValue("Night_Enabled") then
+            RestoreNightWorldLights()
+            return
+        end
+        local inLobby = IsInLobby()
+        if inLobby and not GetValue("Night_Lobby") then
+            RestoreNightWorldLights()
+            return
+        end
+
+        local modLights = GetValue("Night_ModifyLights")
+        if not modLights then
+            RestoreNightWorldLights()
+            return
+        end
+
+        local brightVal = tonumber(GetValue("Night_LightBright")) or 2.0
+        local rangeVal = tonumber(GetValue("Night_LightRange")) or 25
+        local colorKey = GetValue("Night_LightColorPreset") or "Pure White"
+        local targetColor = NightColorPalettes.Lights[colorKey] or Color3.fromRGB(255, 255, 255)
+
+        for _, light in ipairs(workspace:GetDescendants()) do
+            if light:IsA("PointLight") or light:IsA("SpotLight") or light:IsA("SurfaceLight") then
+                if not NightLightCache[light] then
+                    NightLightCache[light] = {
+                        Color = light.Color,
+                        Brightness = light.Brightness,
+                        Range = light.Range
+                    }
+                end
+                light.Color = targetColor
+                light.Brightness = brightVal
+                light.Range = rangeVal
+            end
+        end
+    end
+
+    local function RestoreNightLighting()
+        if not NightOriginal.Saved then return end
+        IsNightApplyingInternal = true
+        pcall(function()
+            if NightOriginal.TimeOfDay then Lighting.TimeOfDay = NightOriginal.TimeOfDay end
+            if NightOriginal.Ambient then Lighting.Ambient = NightOriginal.Ambient end
+            if NightOriginal.OutdoorAmbient then Lighting.OutdoorAmbient = NightOriginal.OutdoorAmbient end
+            if NightOriginal.Brightness then Lighting.Brightness = NightOriginal.Brightness end
+            if NightOriginal.FogColor then Lighting.FogColor = NightOriginal.FogColor end
+            if NightOriginal.FogStart then Lighting.FogStart = NightOriginal.FogStart end
+            if NightOriginal.FogEnd then Lighting.FogEnd = NightOriginal.FogEnd end
+
+            local customAtmos = Lighting:FindFirstChild("Doomsense_NightAtmosphere")
+            if customAtmos then
+                customAtmos:Destroy()
+            end
+
+            local atmos = Lighting:FindFirstChildOfClass("Atmosphere")
+            if atmos and NightOriginal.Atmosphere then
+                atmos.Density = NightOriginal.Atmosphere.Density
+                atmos.Color = NightOriginal.Atmosphere.Color
+                atmos.Decay = NightOriginal.Atmosphere.Decay
+                atmos.Offset = NightOriginal.Atmosphere.Offset
+                atmos.Glare = NightOriginal.Atmosphere.Glare
+                atmos.Haze = NightOriginal.Atmosphere.Haze
+            end
+        end)
+        RestoreNightWorldLights()
+        NightOriginal.Saved = false
+        IsNightApplyingInternal = false
+    end
+
+    local function ApplyNightLighting()
+        local enabled = GetValue("Night_Enabled")
+        local inLobby = IsInLobby()
+        local allowInLobby = GetValue("Night_Lobby")
+
+        if not enabled or (inLobby and not allowInLobby) then
+            RestoreNightLighting()
+            return
+        end
+
+        SaveOriginalLighting()
+        IsNightApplyingInternal = true
+
+        local timeChoice = GetValue("Night_TimePreset") or "Midnight (00:00)"
+        local timeString = NightColorPalettes.Time[timeChoice] or "00:00:00"
+
+        local brightness = tonumber(GetValue("Night_Brightness")) or 1.5
+
+        local ambChoice = GetValue("Night_AmbientPreset") or "Navy Night"
+        local ambientColor = NightColorPalettes.Ambient[ambChoice] or Color3.fromRGB(50, 50, 80)
+
+        local outChoice = GetValue("Night_OutdoorPreset") or "Pitch Black"
+        local outdoorColor = NightColorPalettes.Outdoor[outChoice] or Color3.fromRGB(0, 0, 0)
+
+        local fogEnabled = GetValue("Night_FogEnabled")
+        local fogChoice = GetValue("Night_FogPreset") or "Navy Blue"
+        local fogColor = NightColorPalettes.Fog[fogChoice] or Color3.fromRGB(50, 50, 80)
+        local fogDensity = tonumber(GetValue("Night_FogDensity")) or 2.5
+        local fogDistance = tonumber(GetValue("Night_FogDistance")) or 350
+        local hazeVal = tonumber(GetValue("Night_AtmosphereHaze")) or 1.0
+
+        pcall(function()
+            Lighting.TimeOfDay = timeString
+            Lighting.Ambient = ambientColor
+            Lighting.OutdoorAmbient = outdoorColor
+            Lighting.Brightness = brightness
+
+            local atmos = Lighting:FindFirstChildOfClass("Atmosphere")
+            if fogEnabled then
+                Lighting.FogColor = fogColor
+                Lighting.FogStart = 0
+                Lighting.FogEnd   = fogDistance
+
+                if not atmos then
+                    atmos = Instance.new("Atmosphere")
+                    atmos.Name = "Doomsense_NightAtmosphere"
+                    atmos.Parent = Lighting
+                    NightOriginal.AtmosphereCreated = true
+                end
+                atmos.Density = math.clamp(fogDensity / 5, 0, 1)
+                atmos.Color   = fogColor
+                atmos.Decay   = fogColor
+                atmos.Offset  = 0.25
+                atmos.Glare   = 0
+                atmos.Haze    = hazeVal
+            else
+                Lighting.FogStart = 0
+                Lighting.FogEnd   = 9e9
+                if atmos then
+                    if NightOriginal.AtmosphereCreated then
+                        atmos:Destroy()
+                        NightOriginal.AtmosphereCreated = false
+                    elseif NightOriginal.Atmosphere then
+                        atmos.Density = NightOriginal.Atmosphere.Density
+                        atmos.Color   = NightOriginal.Atmosphere.Color
+                        atmos.Haze    = NightOriginal.Atmosphere.Haze
+                    else
+                        atmos.Density = 0
+                    end
+                end
+            end
+        end)
+
+        UpdateNightWorldLights()
+        IsNightApplyingInternal = false
+    end
+
+    local WasNightLobbyState = true
+    RunService.Heartbeat:Connect(function()
+        local inLobby = IsInLobby()
+        if inLobby ~= WasNightLobbyState then
+            WasNightLobbyState = inLobby
+            if inLobby then
+                if not GetValue("Night_Lobby") then
+                    RestoreNightLighting()
+                else
+                    if GetValue("Night_Enabled") then
+                        task.delay(0.2, ApplyNightLighting)
+                    end
+                end
+            else
+                if GetValue("Night_Enabled") then
+                    task.delay(0.6, ApplyNightLighting)
+                end
+            end
+        end
+    end)
+
+    Lighting:GetPropertyChangedSignal("TimeOfDay"):Connect(function()
+        if not IsNightApplyingInternal and GetValue("Night_Enabled") then
+            local inLobby = IsInLobby()
+            if not inLobby or GetValue("Night_Lobby") then
+                ApplyNightLighting()
+            end
+        end
+    end)
+
+    if InGame then
+        InGame.ChildAdded:Connect(function(Child)
+            if Child.Name == "Map" and GetValue("Night_Enabled") then
+                NightOriginal.Saved = false
+                task.delay(1.2, ApplyNightLighting)
+            end
+        end)
+    end
+
+    -- [ World Generator Progress Bar Engine (Individual Generator Cache, Square, Camera Bound) ]
+    local GenWorldBars = {}
+
+    local function ClearAllGenBars()
+        for gen, data in pairs(GenWorldBars) do
+            if data and data.Gui and data.Gui.Parent then
+                data.Gui:Destroy()
+            end
+        end
+        table.clear(GenWorldBars)
+    end
+
+    local function UpdateGeneratorWorldBars()
+        local enabled = GetValue("GenIndicator_Enabled")
+        local inLobby = IsInLobby()
+        local camera = workspace.CurrentCamera
+
+        if not enabled or inLobby or not GameMap or not camera then
+            ClearAllGenBars()
+            return
+        end
+
+        local gens = GameMap:QueryDescendants("Model#Generator:has(#Main)")
+        if #gens == 0 then
+            ClearAllGenBars()
+            return
+        end
+
+        local chosenColorName = GetValue("GeneratorsColor") or "Cyan"
+        local barColor = ColorPresets[chosenColorName] or Color3.fromRGB(0, 255, 255)
+
+        local offsetY = tonumber(GetValue("GenIndicator_OffsetY")) or 5.5
+        local textOffsetX = tonumber(GetValue("GenIndicator_TextOffsetX")) or 0
+        local textOffsetY = tonumber(GetValue("GenIndicator_TextOffsetY")) or 0
+        local minDistance = math.clamp(tonumber(GetValue("GenIndicator_MinDist")) or 25, 5, 80)
+        local autoHide = GetValue("GenIndicator_AutoHide")
+        local genCheck = GetValue("GeneratorsCheck")
+
+        local camPos = camera.CFrame.Position
+        local currentGens = {}
+
+        for _, gen in ipairs(gens) do
+            local main = gen:FindFirstChild("Main")
+            if main then
+                currentGens[gen] = true
+
+                -- Индивидуальный расчёт прогресса для КОНКРЕТНО ЭТОГО генератора
+                local barUi = gen:FindFirstChild("BarUI", true)
+                local barPart = barUi and barUi:FindFirstChild("Bar")
+                local genProgress = barPart and barPart.Size.X.Scale or (gen:GetAttribute("Completed") and 1 or 0)
+                genProgress = math.clamp(genProgress, 0, 1)
+
+                -- Определение требуемого количества шагов/шестерёнок для данного генератора (по дефолту 5)
+                local maxSteps = gen:GetAttribute("MaxCounter")
+                if not maxSteps then
+                    local maxValObj = gen:FindFirstChild("MaxCounter", true)
+                    maxSteps = maxValObj and maxValObj.Value
+                end
+                maxSteps = tonumber(maxSteps) or 5
+
+                local currentSteps = gen:GetAttribute("Counter")
+                if not currentSteps then
+                    local curValObj = gen:FindFirstChild("Counter", true)
+                    currentSteps = curValObj and curValObj.Value
+                end
+                currentSteps = tonumber(currentSteps)
+                if not currentSteps then
+                    if genProgress >= 0.99 or gen:GetAttribute("Completed") == true then
+                        currentSteps = maxSteps
+                    else
+                        currentSteps = math.clamp(math.round(genProgress * maxSteps), 0, maxSteps)
+                    end
+                end
+
+                local isGenCompleted = (genProgress >= 0.99 or gen:GetAttribute("Completed") == true or currentSteps >= maxSteps)
+                local individualCounterText = string.format("%d/%d", currentSteps, maxSteps)
+                local individualFillRatio = math.clamp(genProgress, 0, 1)
+
+                -- Индивидуальная привязка по исчезновению для конкретного генератора
+                local isFinishedHide = (autoHide and isGenCompleted) or (genCheck and isGenCompleted)
+
+                -- Привязка строго к камере локального игрока и исчезновение при приближении
+                local distToCamera = (camPos - main.Position).Magnitude
+                local isTooClose = distToCamera <= minDistance
+                local isTooFar = distToCamera >= 1200
+
+                local shouldBeVisible = (not isFinishedHide) and (not isTooClose) and (not isTooFar)
+
+                local data = GenWorldBars[gen]
+                if not data or not data.Gui or not data.Gui.Parent then
+                    local bGui = Instance.new("BillboardGui")
+                    bGui.Name = "FPlus_GenWorldBar"
+                    bGui.AlwaysOnTop = true
+                    bGui.ResetOnSpawn = false
+                    bGui.ClipsDescendants = false
+                    bGui.MaxDistance = 1200
+                    bGui.Adornee = main
+
+                    -- 3D адаптация: размер плавно масштабируется перспективой камеры
+                    bGui.Size = UDim2.new(1.8, 30, 0.45, 8)
+
+                    -- Строго без скруглений: плоский прямоугольный дизайн
+                    local bg = Instance.new("Frame")
+                    bg.Name = "BG"
+                    bg.BorderSizePixel = 1
+                    bg.BorderColor3 = Color3.fromRGB(0, 0, 0)
+                    bg.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+                    bg.BackgroundTransparency = 1
+                    bg.Size = UDim2.fromScale(1, 1)
+                    bg.Parent = bGui
+
+                    local fill = Instance.new("Frame")
+                    fill.Name = "Fill"
+                    fill.BorderSizePixel = 0
+                    fill.Size = UDim2.new(individualFillRatio, 0, 1, 0)
+                    fill.BackgroundColor3 = barColor
+                    fill.BackgroundTransparency = 1
+                    fill.Parent = bg
+
+                    local label = Instance.new("TextLabel")
+                    label.Name = "CounterLabel"
+                    label.BackgroundTransparency = 1
+                    label.BorderSizePixel = 0
+                    label.AnchorPoint = Vector2.new(0.5, 0.5)
+                    label.Position = UDim2.new(0.5, textOffsetX, 0.5, textOffsetY)
+                    label.Size = UDim2.fromScale(1, 1)
+                    label.Font = Enum.Font.GothamBold
+                    label.TextSize = 13
+                    label.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    label.TextStrokeTransparency = 1
+                    label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+                    label.Text = individualCounterText
+                    label.ZIndex = 5
+                    label.Parent = bg
+
+                    bGui.Parent = main
+                    data = {
+                        Gui = bGui,
+                        Bg = bg,
+                        Fill = fill,
+                        Label = label,
+                        IsVisible = false
+                    }
+                    GenWorldBars[gen] = data
+                end
+
+                -- Индивидуальное обновление высоты плашки над/под генератором
+                data.Gui.StudsOffset = Vector3.new(0, offsetY, 0)
+
+                -- Индивидуальное положение цифры внутри плашки и свой счётчик (0/5, 1/5...)
+                data.Label.Position = UDim2.new(0.5, textOffsetX, 0.5, textOffsetY)
+                data.Label.Text = individualCounterText
+
+                -- Индивидуальное заполнение полосы под прогресс этого генератора
+                data.Fill.BackgroundColor3 = barColor
+                data.Fill.Size = UDim2.new(individualFillRatio, 0, 1, 0)
+
+                -- Плавное появление/исчезновение по дистанции камеры и при починке
+                if shouldBeVisible and not data.IsVisible then
+                    data.IsVisible = true
+                    TweenService:Create(data.Bg, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.3 }):Play()
+                    TweenService:Create(data.Fill, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0 }):Play()
+                    TweenService:Create(data.Label, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 0, TextStrokeTransparency = 0.35 }):Play()
+                elseif not shouldBeVisible and data.IsVisible then
+                    data.IsVisible = false
+                    TweenService:Create(data.Bg, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 1 }):Play()
+                    TweenService:Create(data.Fill, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 1 }):Play()
+                    TweenService:Create(data.Label, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+                end
+            end
+        end
+
+        for gen, data in pairs(GenWorldBars) do
+            if not currentGens[gen] or not gen.Parent then
+                if data and data.Gui and data.Gui.Parent then
+                    data.Gui:Destroy()
+                end
+                GenWorldBars[gen] = nil
+            end
+        end
+    end
+
+    RunService.Heartbeat:Connect(UpdateGeneratorWorldBars)
+
     -- [ UI Package Definition ]
     local AddonsPackage = {
+        ["Visual_NightMode"] = {
+            ["TabAttributes"] = {
+                ["DisplayTitle"] = "Night Mode / Atmosphere",
+                ["LayoutOrder"] = 106
+            },
+            ["Night_Enabled"] = {
+                ["DisplayDescription"] = "",
+                ["DisplayTitle"] = "Enable Night Mode",
+                ["LayoutOrder"] = 1,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    ApplyNightLighting()
+                end
+            },
+            ["Night_Lobby"] = {
+                ["DisplayDescription"] = "Allows Night Mode to remain active while in the lobby",
+                ["DisplayTitle"] = "Apply In Lobby",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") then
+                        ApplyNightLighting()
+                    end
+                end
+            },
+            ["Night_TimePreset"] = {
+                ["DisplayDescription"] = "Select the world clock time / night sky type",
+                ["DisplayTitle"] = "Time of Day",
+                ["LayoutOrder"] = 3,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "Midnight (00:00)",
+                ["ExtraData"] = {
+                    ["Options"] = "Midnight (00:00)|Deep Night (22:00)|Blood Moon (03:00)|Eclipse (19:00)|Pitch Dark (01:00)"
+                },
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") then
+                        ApplyNightLighting()
+                    end
+                end
+            },
+            ["Night_Brightness"] = {
+                ["DisplayDescription"] = "Adjusts global light brightness level (0 = pitch black, 8 = bright)",
+                ["DisplayTitle"] = "World Brightness",
+                ["LayoutOrder"] = 4,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 1.5,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 8.0, ["Step"] = 0.1 },
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") then
+                        ApplyNightLighting()
+                    end
+                end
+            },
+            ["Night_AmbientPreset"] = {
+                ["DisplayDescription"] = "Color palette for dark areas and shadows",
+                ["DisplayTitle"] = "Shadow Tone (Ambient)",
+                ["LayoutOrder"] = 5,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "Navy Night",
+                ["ExtraData"] = {
+                    ["Options"] = "Navy Night|Pitch Black|Blood Red|Dark Purple|Cold Blue|Ashen Grey"
+                },
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") then
+                        ApplyNightLighting()
+                    end
+                end
+            },
+            ["Night_OutdoorPreset"] = {
+                ["DisplayDescription"] = "Color palette for outdoor ambient highlights",
+                ["DisplayTitle"] = "Outdoor Sky Tone",
+                ["LayoutOrder"] = 6,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "Pitch Black",
+                ["ExtraData"] = {
+                    ["Options"] = "Pitch Black|Midnight Blue|Blood Tint|Dark Sepia|Muted Grey"
+                },
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") then
+                        ApplyNightLighting()
+                    end
+                end
+            },
+            ["Night_FogEnabled"] = {
+                ["DisplayDescription"] = "Toggles dense atmospheric fog on or off",
+                ["DisplayTitle"] = "Enable Custom Fog",
+                ["LayoutOrder"] = 7,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") then
+                        ApplyNightLighting()
+                    end
+                end
+            },
+            ["Night_FogPreset"] = {
+                ["DisplayDescription"] = "Color tint for the atmospheric fog",
+                ["DisplayTitle"] = "Fog Color",
+                ["LayoutOrder"] = 8,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "Navy Blue",
+                ["ExtraData"] = {
+                    ["Options"] = "Navy Blue|Abyssal Black|Blood Crimson|Spectral Purple|Toxic Green|Misty Grey"
+                },
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") and GetValue("Night_FogEnabled") then
+                        ApplyNightLighting()
+                    end
+                end
+            },
+            ["Night_FogDensity"] = {
+                ["DisplayDescription"] = "Fog thickness (0 = clear, 5 = extremely thick)",
+                ["DisplayTitle"] = "Fog Thickness / Density",
+                ["LayoutOrder"] = 9,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 2.5,
+                ["ExtraData"] = { ["MinValue"] = 0.1, ["MaxValue"] = 5.0, ["Step"] = 0.1 },
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") and GetValue("Night_FogEnabled") then
+                        ApplyNightLighting()
+                    end
+                end
+            },
+            ["Night_FogDistance"] = {
+                ["DisplayDescription"] = "View distance before fog fully covers sight",
+                ["DisplayTitle"] = "Fog View Distance",
+                ["LayoutOrder"] = 10,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 350,
+                ["ExtraData"] = { ["MinValue"] = 50, ["MaxValue"] = 1000, ["Step"] = 25 },
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") and GetValue("Night_FogEnabled") then
+                        ApplyNightLighting()
+                    end
+                end
+            },
+            ["Night_AtmosphereHaze"] = {
+                ["DisplayDescription"] = "Atmospheric horizon haze intensity",
+                ["DisplayTitle"] = "Atmosphere Haze",
+                ["LayoutOrder"] = 11,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 1.0,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 10.0, ["Step"] = 0.5 },
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") and GetValue("Night_FogEnabled") then
+                        ApplyNightLighting()
+                    end
+                end
+            },
+            ["Night_ModifyLights"] = {
+                ["DisplayDescription"] = "Modifies all PointLights, SpotLights and SurfaceLights on the map",
+                ["DisplayTitle"] = "Modify Map Lights",
+                ["LayoutOrder"] = 12,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") then
+                        UpdateNightWorldLights()
+                    else
+                        RestoreNightWorldLights()
+                    end
+                end
+            },
+            ["Night_LightBright"] = {
+                ["DisplayDescription"] = "Brightness level applied to map light sources",
+                ["DisplayTitle"] = "Map Lights Brightness",
+                ["LayoutOrder"] = 13,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 2.0,
+                ["ExtraData"] = { ["MinValue"] = 0.5, ["MaxValue"] = 10.0, ["Step"] = 0.5 },
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") and GetValue("Night_ModifyLights") then
+                        UpdateNightWorldLights()
+                    end
+                end
+            },
+            ["Night_LightRange"] = {
+                ["DisplayDescription"] = "Radius in studs for map light sources",
+                ["DisplayTitle"] = "Map Lights Radius",
+                ["LayoutOrder"] = 14,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 25,
+                ["ExtraData"] = { ["MinValue"] = 5, ["MaxValue"] = 60, ["Step"] = 5 },
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") and GetValue("Night_ModifyLights") then
+                        UpdateNightWorldLights()
+                    end
+                end
+            },
+            ["Night_LightColorPreset"] = {
+                ["DisplayDescription"] = "Color tone applied to map light sources",
+                ["DisplayTitle"] = "Map Lights Color",
+                ["LayoutOrder"] = 15,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "Pure White",
+                ["ExtraData"] = {
+                    ["Options"] = "Pure White|Warm Torch|Cold Cyan|Blood Red|Pale Violet|Lime Glow"
+                },
+                ["ScriptFunction"] = function(self, val)
+                    if GetValue("Night_Enabled") and GetValue("Night_ModifyLights") then
+                        UpdateNightWorldLights()
+                    end
+                end
+            }
+        },
+
+        ["Visual_Generators"] = {
+            ["TabAttributes"] = {
+                ["DisplayTitle"] = "Generator Indicators",
+                ["LayoutOrder"] = 107
+            },
+            ["GenIndicator_Enabled"] = {
+                ["DisplayDescription"] = "Shows 3D indicator bars directly on all generators with 0/5 counter",
+                ["DisplayTitle"] = "Enable Generator Bars",
+                ["LayoutOrder"] = 1,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+            },
+            ["GenIndicator_AutoHide"] = {
+                ["DisplayDescription"] = "Hides bar when generator is completed or all generators are done",
+                ["DisplayTitle"] = "Hide When Completed",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+            },
+            ["GenIndicator_OffsetY"] = {
+                ["DisplayDescription"] = "Placement above or below generator (positive = above, negative = below)",
+                ["DisplayTitle"] = "Bar Vertical Position",
+                ["LayoutOrder"] = 3,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 5.5,
+                ["ExtraData"] = { ["MinValue"] = -8.0, ["MaxValue"] = 10.0, ["Step"] = 0.5 }
+            },
+            ["GenIndicator_TextOffsetX"] = {
+                ["DisplayDescription"] = "Horizontal fine-tuning of the counter text inside the bar (px)",
+                ["DisplayTitle"] = "Number Position: X Offset",
+                ["LayoutOrder"] = 4,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 0,
+                ["ExtraData"] = { ["MinValue"] = -40, ["MaxValue"] = 40, ["Step"] = 1 }
+            },
+            ["GenIndicator_TextOffsetY"] = {
+                ["DisplayDescription"] = "Vertical fine-tuning of the counter text inside the bar (px)",
+                ["DisplayTitle"] = "Number Position: Y Offset",
+                ["LayoutOrder"] = 5,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 0,
+                ["ExtraData"] = { ["MinValue"] = -20, ["MaxValue"] = 20, ["Step"] = 1 }
+            },
+            ["GenIndicator_MinDist"] = {
+                ["DisplayDescription"] = "Distance to camera where the indicator fades out and disappears",
+                ["DisplayTitle"] = "Camera Proximity Fade Distance",
+                ["LayoutOrder"] = 6,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 25,
+                ["ExtraData"] = { ["MinValue"] = 10, ["MaxValue"] = 60, ["Step"] = 5 }
+            }
+        },
         ["Fun_Credits"] = {
             ["TabAttributes"] = {
                 ["DisplayTitle"] = "Mod Made " .. RichTextGradientColor("by doomsenseteam/R3cup", {
@@ -2154,6 +3069,32 @@ task.spawn(function()
                     self.DisplayTitle = self.DisplayTitle:gsub("1337", RichTextGradientColor("1337", {Color3.fromRGB(16, 47, 185), Color3.fromRGB(146, 202, 93)}))
                     if LocalPlayer.Character then self:HookAnimator(LocalPlayer.Character) end
                 end
+            },
+            ["Fun_StaminaStopper"] = {
+                ["DisplayDescription"] = "Releases sprint button when stamina reaches threshold",
+                ["DisplayTitle"] = "Stamina Stopper",
+                ["LayoutOrder"] = 5,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false
+            },
+            ["Fun_StaminaThreshold"] = {
+                ["DisplayDescription"] = "Stamina cutoff threshold to release sprint",
+                ["DisplayTitle"] = "Stamina Threshold",
+                ["LayoutOrder"] = 6,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 15,
+                ["ExtraData"] = { ["MinValue"] = 1, ["MaxValue"] = 35, ["Step"] = 1 }
+            },
+            ["Fun_StaminaLockDuration"] = {
+                ["DisplayDescription"] = "Sprint button lock duration after release",
+                ["DisplayTitle"] = "Sprint Lock Duration",
+                ["LayoutOrder"] = 7,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 2.0,
+                ["ExtraData"] = { ["MinValue"] = 0.5, ["MaxValue"] = 5.0, ["Step"] = 0.1 }
             }
         },
 
@@ -2250,6 +3191,8 @@ task.spawn(function()
         }
     }
 
+    HandleUIFeatures("Visual_NightMode", AddonsPackage["Visual_NightMode"])
+    HandleUIFeatures("Visual_Generators", AddonsPackage["Visual_Generators"])
     HandleUIFeatures("Custom_LMS", AddonsPackage["Custom_LMS"])
     HandleUIFeatures("Custom_LMS_Visuals", AddonsPackage["Custom_LMS_Visuals"])
     HandleUIFeatures("Custom_Chase", AddonsPackage["Custom_Chase"])
@@ -2383,9 +3326,10 @@ task.spawn(function()
     RecalculateWindowScale()
 
     local TABS = {
-        { Key = "Main",  Title = "Plus",  Icon = "rbxassetid://118860705115878", Order = 1 },
-        { Key = "Music", Title = "Music", Icon = "rbxassetid://10734905958",     Order = 2 },
-        { Key = "Fun",   Title = "Fun",   Icon = "rbxassetid://10734918735",     Order = 3 },
+        { Key = "Main",   Title = "Plus",   Icon = "rbxassetid://118860705115878", Order = 1 },
+        { Key = "Visual", Title = "Visual", Icon = "rbxassetid://10734910430",     Order = 2 },
+        { Key = "Music",  Title = "Music",  Icon = "rbxassetid://10734905958",     Order = 3 },
+        { Key = "Fun",    Title = "Fun",    Icon = "rbxassetid://10734918735",     Order = 4 },
     }
 
     local ButtonRefs = {}
@@ -2463,16 +3407,26 @@ task.spawn(function()
         for _, item in ipairs(ContentsScrolling:GetChildren()) do
             if item:IsA("GuiObject") and not item:IsA("UIListLayout") and not item:IsA("UIPadding") and item ~= CanvasAutoSpacer then
                 local ownerTab = FastGetItemTab(item)
+                local isVisualItem = (ownerTab == "Visual_NightMode" or ownerTab == "Visual_Generators")
                 local isMusicItem = (ownerTab == "Custom_LMS" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase")
                 local isFunItem = (ownerTab == "Fun_Wheel" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
 
                 if tabKey == "Main" then
-                    if isMusicItem or isFunItem then
+                    if isVisualItem or isMusicItem or isFunItem then
                         item.Visible = false
                     else
                         if SavedOriginalVisibility[item] ~= nil then
                             item.Visible = SavedOriginalVisibility[item]
                         end
+                    end
+                elseif tabKey == "Visual" then
+                    if isVisualItem then
+                        item.Visible = true
+                    else
+                        if SavedOriginalVisibility[item] == nil then
+                            SavedOriginalVisibility[item] = item.Visible
+                        end
+                        item.Visible = false
                     end
                 elseif tabKey == "Music" then
                     if isMusicItem then
@@ -2681,7 +3635,7 @@ task.spawn(function()
         for _, item in ipairs(ContentsScrolling:GetChildren()) do
             if item:IsA("GuiObject") and not item:IsA("UIListLayout") and not item:IsA("UIPadding") and item ~= CanvasAutoSpacer then
                 local ownerTab = FastGetItemTab(item)
-                local isAddonItem = (ownerTab == "Custom_LMS" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase" or ownerTab == "Fun_Wheel" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
+                local isAddonItem = (ownerTab == "Visual_NightMode" or ownerTab == "Visual_Generators" or ownerTab == "Custom_LMS" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase" or ownerTab == "Fun_Wheel" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
                 if not isAddonItem and SavedOriginalVisibility[item] == nil then
                     SavedOriginalVisibility[item] = item.Visible
                 end
