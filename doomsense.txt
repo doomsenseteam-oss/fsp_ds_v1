@@ -1,4 +1,4 @@
--- by r3cup
+-- by r3cup, doomsense  v1.2
 
 task.spawn(function()
     _G.ForsakenPlus_CustomRailLoaded = true
@@ -46,7 +46,6 @@ task.spawn(function()
     SafeMakeFolder("NaikoScript/ForsakenPlus/Music/Custom LMS/Survivor")
     SafeMakeFolder("NaikoScript/ForsakenPlus/Music/Custom LMS/Killer")
 
-    -- [ Isolated Audio Mute Buses: Independent LMS & Chase Engines ]
     local LMS_MuteBus = Instance.new("SoundGroup")
     LMS_MuteBus.Name = "FPlus_LMS_MuteBus"
     LMS_MuteBus.Volume = 1
@@ -141,15 +140,47 @@ task.spawn(function()
         end)
     end
 
+    local function IsSpectating()
+        local map = workspace:FindFirstChild("Map")
+        if not map or not map:FindFirstChild("Ingame") then return false end
+
+        local char = LocalPlayer.Character
+        local specFolder = workspace.Players:FindFirstChild("Spectating")
+        if specFolder and char and char:IsDescendantOf(specFolder) then
+            return true
+        end
+        if char and char.Parent and char.Parent.Name:lower():find("spectat") then
+            return true
+        end
+
+        local cam = workspace.CurrentCamera
+        local subj = cam and cam.CameraSubject
+        local target = subj and (subj:IsA("Humanoid") and subj.Parent or subj:IsA("Model") and subj)
+        if target and target:IsA("Model") and target ~= char then
+            local survFolder = workspace.Players:FindFirstChild("Survivors")
+            local killFolder = workspace.Players:FindFirstChild("Killers")
+            if (survFolder and target:IsDescendantOf(survFolder)) or (killFolder and target:IsDescendantOf(killFolder)) then
+                return true
+            end
+        end
+
+        return false
+    end
+
     local function IsInLobby()
         local map = workspace:FindFirstChild("Map")
         if not map or not map:FindFirstChild("Ingame") then return true end
-        local sideBar = MainUI:FindFirstChild("Sidebar")
-        if sideBar and sideBar:GetAttribute("WasVisible") == true then return true end
+
+        if IsSpectating() then return false end
+
         local themes = workspace:FindFirstChild("Themes")
         if themes and themes:FindFirstChild("Lobby") and themes.Lobby:IsA("Sound") and themes.Lobby.IsPlaying then
             return true
         end
+
+        local sideBar = MainUI:FindFirstChild("Sidebar")
+        if sideBar and sideBar:GetAttribute("WasVisible") == true then return true end
+
         return false
     end
 
@@ -161,6 +192,54 @@ task.spawn(function()
         local killersFolder = workspace.Players:FindFirstChild("Killers")
         return killersFolder and char:IsDescendantOf(killersFolder)
     end
+
+    local function CanRunChase()
+        if IsInLobby() then return false end
+        if not GetValue("Chase_Active") then return false end
+        if IsLocalKiller() then return true end
+        if GetValue("Chase_SurvivorMode") == true then
+            local killFolder = workspace.Players:FindFirstChild("Killers")
+            if killFolder and #killFolder:GetChildren() > 0 then
+                return true
+            end
+        end
+        return false
+    end
+
+    local IsCurrentMatch2v12 = false
+    task.spawn(function()
+        while true do
+            task.wait(2)
+            if IsInLobby() then
+                IsCurrentMatch2v12 = false
+            else
+                local gm = workspace:GetAttribute("Gamemode") or workspace:GetAttribute("ForcedServerGamemode") or workspace:GetAttribute("ServerGamemode")
+                if gm and tostring(gm):lower():find("2v12") then
+                    IsCurrentMatch2v12 = true
+                else
+                    local killFolder = workspace.Players:FindFirstChild("Killers")
+                    if killFolder then
+                        local distinctKillers = 0
+                        for _, k in ipairs(killFolder:GetChildren()) do
+                            if k:IsA("Model") and k:GetAttribute("Dead") ~= true then
+                                local h = k:FindFirstChildOfClass("Humanoid")
+                                if not h or h.Health > 0 then
+                                    local isPlayer = Players:GetPlayerFromCharacter(k) ~= nil
+                                    local isBoss = h and h.MaxHealth >= 500
+                                    if isPlayer or isBoss then
+                                        distinctKillers = distinctKillers + 1
+                                    end
+                                end
+                            end
+                        end
+                        IsCurrentMatch2v12 = (distinctKillers >= 2)
+                    else
+                        IsCurrentMatch2v12 = false
+                    end
+                end
+            end
+        end
+    end)
 
     local function IsSoundProtected(snd)
         if not snd or not snd:IsA("Sound") or snd.Name:find("Custom_") then return true end
@@ -187,10 +266,10 @@ task.spawn(function()
                     FadeLMSMuteBus(0, 0.2)
                 end
             else
-                local isChaseOn = not inLobby and IsLocalKiller() and GetValue("Chase_Active") and (Chase_State and (Chase_State.CurrentLayer > 0 or Chase_State.ThemesSilenced))
+                local isChaseOn = not inLobby and CanRunChase() and (Chase_State and Chase_State.CurrentLayer > 0)
                 if isChaseOn then
                     SuppressChaseAudio(child)
-                    FadeChaseMuteBus(0, 0.3)
+                    FadeChaseMuteBus(0, 0.2)
                 end
             end
         end)
@@ -631,6 +710,8 @@ task.spawn(function()
         local sOpts, kOpts, cOpts = ScanAllTracks()
         UpdateDropdownOptions("LMS_SurvTrack", sOpts)
         UpdateDropdownOptions("LMS_KillerTrack", kOpts)
+        UpdateDropdownOptions("TwoVThree_SurvTrack", sOpts)
+        UpdateDropdownOptions("TwoVThree_KillerTrack", kOpts)
         UpdateDropdownOptions("Chase_Track", cOpts)
 
         if notify and typeof(ColoredPrint) == "function" then
@@ -951,8 +1032,33 @@ task.spawn(function()
             survModel = nil
         end
 
-        local survImg, survName = ResolveEntity(survModel, "Survivor")
-        local killImg, killName = ResolveEntity(killModel, "Killer")
+        local isMode2v12 = IsCurrentMatch2v12
+        local survModels = {}
+        local killModels = {}
+
+        if isMode2v12 then
+            if survFolder then
+                for _, c in ipairs(survFolder:GetChildren()) do
+                    if IsModelAlive(c) and not (killFolder and c:IsDescendantOf(killFolder)) then
+                        table.insert(survModels, c)
+                        if #survModels >= 3 then break end
+                    end
+                end
+            end
+            if killFolder then
+                for _, c in ipairs(killFolder:GetChildren()) do
+                    if IsModelAlive(c) and not (survFolder and c:IsDescendantOf(survFolder)) then
+                        table.insert(killModels, c)
+                        if #killModels >= 2 then break end
+                    end
+                end
+            end
+            if #survModels == 0 and survModel then table.insert(survModels, survModel) end
+            if #killModels == 0 and killModel then table.insert(killModels, killModel) end
+        else
+            if survModel then table.insert(survModels, survModel) end
+            if killModel then table.insert(killModels, killModel) end
+        end
 
         local MainFrame = Instance.new("Frame", container)
         MainFrame.Name = "DOD_Overlay"
@@ -969,9 +1075,12 @@ task.spawn(function()
 
         PlayFXSound("132670234831172", 0.75)
 
-        local function SpawnSprite(imgId, targetCenterX, startX)
+        local sBoxes = {}
+        local kBoxes = {}
+
+        local function SpawnSprite(imgId, targetCenterX, startX, widthScale, heightScale)
             local box = Instance.new("Frame", MainFrame)
-            box.Size = UDim2.fromScale(0.29, 0.55)
+            box.Size = UDim2.fromScale(widthScale or 0.29, heightScale or 0.55)
             box.AnchorPoint = Vector2.new(0.5, 1)
             box.Position = UDim2.new(startX, 0, 1, 0)
             box.BackgroundTransparency = 1
@@ -990,12 +1099,52 @@ task.spawn(function()
             return box
         end
 
-        local sBox = SpawnSprite(survImg, 0.2, -0.4)
-        local kBox = SpawnSprite(killImg, 0.8, 1.4)
+        if isMode2v12 then
+            local survCount = #survModels
+            if survCount == 3 then
+                local survOffsets = { 0.10, 0.21, 0.32 }
+                for i, sM in ipairs(survModels) do
+                    local sImg = ResolveEntity(sM, "Survivor")
+                    table.insert(sBoxes, SpawnSprite(sImg, survOffsets[i], -0.4, 0.18, 0.48))
+                end
+            elseif survCount == 2 then
+                local survOffsets = { 0.14, 0.27 }
+                for i, sM in ipairs(survModels) do
+                    local sImg = ResolveEntity(sM, "Survivor")
+                    table.insert(sBoxes, SpawnSprite(sImg, survOffsets[i], -0.4, 0.22, 0.52))
+                end
+            else
+                local sImg = ResolveEntity(survModels[1], "Survivor")
+                table.insert(sBoxes, SpawnSprite(sImg, 0.2, -0.4, 0.29, 0.55))
+            end
 
-        -- Survivor
+            local killCount = #killModels
+            if killCount >= 2 then
+                local killOffsets = { 0.73, 0.86 }
+                for i, kM in ipairs(killModels) do
+                    local kImg = ResolveEntity(kM, "Killer")
+                    table.insert(kBoxes, SpawnSprite(kImg, killOffsets[i], 1.4, 0.22, 0.52))
+                end
+            else
+                local kImg = ResolveEntity(killModels[1], "Killer")
+                table.insert(kBoxes, SpawnSprite(kImg, 0.8, 1.4, 0.29, 0.55))
+            end
+        else
+            local sImg = ResolveEntity(survModels[1], "Survivor")
+            local kImg = ResolveEntity(killModels[1], "Killer")
+            table.insert(sBoxes, SpawnSprite(sImg, 0.2, -0.4, 0.29, 0.55))
+            table.insert(kBoxes, SpawnSprite(kImg, 0.8, 1.4, 0.29, 0.55))
+        end
+
+        -- Here dies...
+        local survCount = #survModels
+        local sPlateHeight = (isMode2v12 and survCount == 3) and 38 or ((isMode2v12 and survCount == 2) and 44 or 52)
+        local sPlateGap = (isMode2v12 and survCount == 3) and 4 or ((isMode2v12 and survCount == 2) and 8 or 0)
+        local sLastBottom = 36 + (survCount - 1) * (sPlateHeight + sPlateGap) + sPlateHeight
+        local leftGroupHeight = isMode2v12 and (sLastBottom + 35) or 140
+
         local leftGroup = Instance.new("Frame", MainFrame)
-        leftGroup.Size = UDim2.new(0.32, 0, 0, 140)
+        leftGroup.Size = UDim2.new(0.32, 0, 0, leftGroupHeight)
         leftGroup.AnchorPoint = Vector2.new(0.5, 0)
         leftGroup.Position = UDim2.new(-0.4, 0, 0.02, 0)
         leftGroup.BackgroundTransparency = 1
@@ -1016,24 +1165,47 @@ task.spawn(function()
         diesHeader.TextXAlignment = Enum.TextXAlignment.Right
         diesHeader.ZIndex = 13
 
-        local survBox = Instance.new("Frame", leftGroup)
-        survBox.Size = UDim2.new(1, 0, 0, 52)
-        survBox.Position = UDim2.new(0, 0, 0, 35)
-        survBox.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-        survBox.BackgroundTransparency = 0.2
-        survBox.ZIndex = 17
-        local sStroke = Instance.new("UIStroke", survBox)
-        sStroke.Color = Color3.fromRGB(255, 255, 255); sStroke.Transparency = 0.45; sStroke.Thickness = 2
+        if isMode2v12 and survCount > 1 then
+            local plateTextSize = (survCount == 3) and 24 or 28
 
-        local sLbl = Instance.new("TextLabel", survBox)
-        sLbl.Size = UDim2.fromScale(1, 1); sLbl.BackgroundTransparency = 1
-        sLbl.Text = tostring(survName):upper(); sLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
-        sLbl.Font = Enum.Font.GothamBold; sLbl.TextSize = 40
-        sLbl.ZIndex = 18
+            for i, sM in ipairs(survModels) do
+                local _, sName = ResolveEntity(sM, "Survivor")
+                local sBox = Instance.new("Frame", leftGroup)
+                sBox.Size = UDim2.new(1, 0, 0, sPlateHeight)
+                sBox.Position = UDim2.new(0, 0, 0, 36 + (i - 1) * (sPlateHeight + sPlateGap))
+                sBox.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+                sBox.BackgroundTransparency = 0.2
+                sBox.ZIndex = 17
+                local sStroke = Instance.new("UIStroke", sBox)
+                sStroke.Color = Color3.fromRGB(255, 255, 255); sStroke.Transparency = 0.45; sStroke.Thickness = 1.6
+
+                local sLbl = Instance.new("TextLabel", sBox)
+                sLbl.Size = UDim2.fromScale(1, 1); sLbl.BackgroundTransparency = 1
+                sLbl.Text = tostring(sName):upper(); sLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+                sLbl.Font = Enum.Font.GothamBold; sLbl.TextSize = plateTextSize
+                sLbl.ZIndex = 18
+            end
+        else
+            local _, sName = ResolveEntity(survModels[1], "Survivor")
+            local survBox = Instance.new("Frame", leftGroup)
+            survBox.Size = UDim2.new(1, 0, 0, 52)
+            survBox.Position = UDim2.new(0, 0, 0, 35)
+            survBox.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+            survBox.BackgroundTransparency = 0.2
+            survBox.ZIndex = 17
+            local sStroke = Instance.new("UIStroke", survBox)
+            sStroke.Color = Color3.fromRGB(255, 255, 255); sStroke.Transparency = 0.45; sStroke.Thickness = 2
+
+            local sLbl = Instance.new("TextLabel", survBox)
+            sLbl.Size = UDim2.fromScale(1, 1); sLbl.BackgroundTransparency = 1
+            sLbl.Text = tostring(sName):upper(); sLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+            sLbl.Font = Enum.Font.GothamBold; sLbl.TextSize = 40
+            sLbl.ZIndex = 18
+        end
 
         local leftExcl = Instance.new("TextLabel", leftGroup)
         leftExcl.Size = UDim2.new(0, 180, 0, 180)
-        leftExcl.Position = UDim2.new(1, -140, 0, 45)
+        leftExcl.Position = UDim2.new(1, isMode2v12 and -135 or -140, 0, isMode2v12 and (sLastBottom - 74) or 45)
         leftExcl.BackgroundTransparency = 1
         leftExcl.Text = "!"
         leftExcl.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -1047,9 +1219,15 @@ task.spawn(function()
 
         TweenService:Create(leftGroup, TweenInfo.new(0.65, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), { Position = UDim2.new(0.2, 0, 0.02, 0) }):Play()
 
-        -- Killer
+        -- Here deaths...
+        local killCount = #killModels
+        local kPlateHeight = (isMode2v12 and killCount >= 2) and 44 or 52
+        local kPlateGap = (isMode2v12 and killCount >= 2) and 8 or 0
+        local kLastBottom = 36 + (killCount - 1) * (kPlateHeight + kPlateGap) + kPlateHeight
+        local rightGroupHeight = isMode2v12 and (kLastBottom + 35) or 140
+
         local rightGroup = Instance.new("Frame", MainFrame)
-        rightGroup.Size = UDim2.new(0.32, 0, 0, 140)
+        rightGroup.Size = UDim2.new(0.32, 0, 0, rightGroupHeight)
         rightGroup.AnchorPoint = Vector2.new(0.5, 0)
         rightGroup.Position = UDim2.new(1.4, 0, 0.02, 0)
         rightGroup.BackgroundTransparency = 1
@@ -1070,22 +1248,43 @@ task.spawn(function()
         deathsHeader.TextXAlignment = Enum.TextXAlignment.Left
         deathsHeader.ZIndex = 13
 
-        local killBox = Instance.new("Frame", rightGroup)
-        killBox.Size = UDim2.new(1, 0, 0, 52); killBox.Position = UDim2.new(0, 0, 0, 35)
-        killBox.BackgroundColor3 = Color3.fromRGB(15, 15, 15); killBox.BackgroundTransparency = 0.2
-        killBox.ZIndex = 17
-        local kStroke = Instance.new("UIStroke", killBox)
-        kStroke.Color = Color3.fromRGB(255, 255, 255); kStroke.Transparency = 0.45; kStroke.Thickness = 2
+        if isMode2v12 and killCount > 1 then
+            for i, kM in ipairs(killModels) do
+                local _, kName = ResolveEntity(kM, "Killer")
+                local kBox = Instance.new("Frame", rightGroup)
+                kBox.Size = UDim2.new(1, 0, 0, kPlateHeight)
+                kBox.Position = UDim2.new(0, 0, 0, 36 + (i - 1) * (kPlateHeight + kPlateGap))
+                kBox.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+                kBox.BackgroundTransparency = 0.2
+                kBox.ZIndex = 17
+                local kStroke = Instance.new("UIStroke", kBox)
+                kStroke.Color = Color3.fromRGB(255, 255, 255); kStroke.Transparency = 0.45; kStroke.Thickness = 1.8
 
-        local kLbl = Instance.new("TextLabel", killBox)
-        kLbl.Size = UDim2.fromScale(1, 1); kLbl.BackgroundTransparency = 1
-        kLbl.Text = tostring(killName):upper(); kLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
-        kLbl.Font = Enum.Font.GothamBold; kLbl.TextSize = 40
-        kLbl.ZIndex = 18
+                local kLbl = Instance.new("TextLabel", kBox)
+                kLbl.Size = UDim2.fromScale(1, 1); kLbl.BackgroundTransparency = 1
+                kLbl.Text = tostring(kName):upper(); kLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+                kLbl.Font = Enum.Font.GothamBold; kLbl.TextSize = 28
+                kLbl.ZIndex = 18
+            end
+        else
+            local _, kName = ResolveEntity(killModels[1], "Killer")
+            local killBox = Instance.new("Frame", rightGroup)
+            killBox.Size = UDim2.new(1, 0, 0, 52); killBox.Position = UDim2.new(0, 0, 0, 35)
+            killBox.BackgroundColor3 = Color3.fromRGB(15, 15, 20); killBox.BackgroundTransparency = 0.2
+            killBox.ZIndex = 17
+            local kStroke = Instance.new("UIStroke", killBox)
+            kStroke.Color = Color3.fromRGB(255, 255, 255); kStroke.Transparency = 0.45; kStroke.Thickness = 2
+
+            local kLbl = Instance.new("TextLabel", killBox)
+            kLbl.Size = UDim2.fromScale(1, 1); kLbl.BackgroundTransparency = 1
+            kLbl.Text = tostring(kName):upper(); kLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+            kLbl.Font = Enum.Font.GothamBold; kLbl.TextSize = 40
+            kLbl.ZIndex = 18
+        end
 
         local rightExcl = Instance.new("TextLabel", rightGroup)
         rightExcl.Size = UDim2.new(0, 180, 0, 180)
-        rightExcl.Position = UDim2.new(0, -40, 0, 45)
+        rightExcl.Position = UDim2.new(0, isMode2v12 and -45 or -40, 0, isMode2v12 and (kLastBottom - 74) or 45)
         rightExcl.BackgroundTransparency = 1
         rightExcl.Text = "!"
         rightExcl.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -1122,7 +1321,7 @@ task.spawn(function()
         local vsBox = Instance.new("Frame", vsGroup)
         vsBox.Size = UDim2.new(1, 0, 0, 84)
         vsBox.Position = UDim2.new(0, 0, 0, 45)
-        vsBox.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+        vsBox.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
         vsBox.BackgroundTransparency = 0.2
         vsBox.ZIndex = 19
         local vStroke = Instance.new("UIStroke", vsBox); vStroke.Color = Color3.fromRGB(255, 255, 255); vStroke.Thickness = 2
@@ -1181,8 +1380,12 @@ task.spawn(function()
 
         task.delay(3.2, function()
             if rotConn then rotConn:Disconnect() end
-            if sBox and sBox.Parent then TweenService:Create(sBox, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), { Position = UDim2.new(-0.4, 0, 1, 0) }):Play() end
-            if kBox and kBox.Parent then TweenService:Create(kBox, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), { Position = UDim2.new(1.4, 0, 1, 0) }):Play() end
+            for _, sB in ipairs(sBoxes) do
+                if sB and sB.Parent then TweenService:Create(sB, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), { Position = UDim2.new(-0.4, 0, 1, 0) }):Play() end
+            end
+            for _, kB in ipairs(kBoxes) do
+                if kB and kB.Parent then TweenService:Create(kB, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), { Position = UDim2.new(1.4, 0, 1, 0) }):Play() end
+            end
             if leftGroup and leftGroup.Parent then TweenService:Create(leftGroup, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), { Position = UDim2.new(-0.4, 0, 0.02, 0) }):Play() end
             if rightGroup and rightGroup.Parent then TweenService:Create(rightGroup, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), { Position = UDim2.new(1.4, 0, 0.02, 0) }):Play() end
             if vsGroup and vsGroup.Parent then TweenService:Create(vsGroup, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.In), { Position = UDim2.new(0.5, 0, -0.4, 0) }):Play() end
@@ -1317,17 +1520,6 @@ task.spawn(function()
         local inLobby = IsInLobby()
         local allowLobbyAudio = (GetValue("LMS_LobbyAudio") == true)
 
-        if inLobby and not allowLobbyAudio then
-            if LMS_State.IsTriggered or LMS_State.CurrentSound or LMS_State.LMSActive then
-                StopLMS(false)
-            end
-            return
-        end
-
-        local themes = workspace:FindFirstChild("Themes")
-        local lastSurv = themes and themes:FindFirstChild("LastSurvivor")
-        local isNativeLMS = lastSurv and lastSurv:IsA("Sound") and (lastSurv.IsPlaying or lastSurv.Playing or lastSurv.TimePosition > 0)
-
         local survivorsFolder = workspace.Players:FindFirstChild("Survivors")
         local spectatingFolder = workspace.Players:FindFirstChild("Spectating")
         local killersFolder = workspace.Players:FindFirstChild("Killers")
@@ -1337,14 +1529,38 @@ task.spawn(function()
             return
         end
 
-        local activeSurvivors = 0
-        local totalSurvivors = 0
         local myCharacter = LocalPlayer.Character
         local myHum = myCharacter and myCharacter:FindFirstChildOfClass("Humanoid")
         local isAlive = myCharacter and (myCharacter:GetAttribute("Dead") ~= true) and (myHum and myHum.Health > 0)
 
         local isLocalSurvivor = isAlive and myCharacter:IsDescendantOf(survivorsFolder)
         local isLocalKiller = isAlive and myCharacter:IsDescendantOf(killersFolder)
+        local isNonParticipant = not isLocalSurvivor and not isLocalKiller
+
+        if isNonParticipant and not allowLobbyAudio then
+            if LMS_State.IsTriggered or LMS_State.CurrentSound or LMS_State.LMSActive then
+                StopLMS(false)
+            end
+            return
+        end
+
+        local themes = workspace:FindFirstChild("Themes")
+        local isNativeLMS = false
+        local activeNativeSounds = {}
+
+        if themes then
+            for _, snd in ipairs(themes:GetChildren()) do
+                if snd:IsA("Sound") and IsLMSSound(snd) then
+                    table.insert(activeNativeSounds, snd)
+                    if (snd.IsPlaying or snd.Playing or snd.TimePosition > 0) then
+                        isNativeLMS = true
+                    end
+                end
+            end
+        end
+
+        local activeSurvivors = 0
+        local totalSurvivors = 0
 
         for _, char in ipairs(survivorsFolder:GetChildren()) do
             totalSurvivors = totalSurvivors + 1
@@ -1358,13 +1574,21 @@ task.spawn(function()
         end
 
         local isLMS = false
-        if isNativeLMS then
-            isLMS = true
-        elseif activeSurvivors == 1 and totalSurvivors > 1 and not inLobby then
-            isLMS = true
+        if IsCurrentMatch2v12 then
+            if isNativeLMS and activeSurvivors <= 3 and activeSurvivors >= 1 then
+                isLMS = true
+            elseif activeSurvivors <= 3 and activeSurvivors >= 1 and totalSurvivors > 3 and not inLobby then
+                isLMS = true
+            end
+        else
+            if isNativeLMS and activeSurvivors == 1 then
+                isLMS = true
+            elseif activeSurvivors == 1 and totalSurvivors > 1 and not inLobby then
+                isLMS = true
+            end
         end
 
-        if inLobby and not allowLobbyAudio then
+        if isNonParticipant and not allowLobbyAudio then
             isLMS = false
         end
 
@@ -1374,21 +1598,23 @@ task.spawn(function()
             local role = "Survivor"
             local selectedTrack = "None"
 
-            if inLobby and allowLobbyAudio then
-                role = "Survivor"
-                selectedTrack = GetValue("LMS_SurvTrack") or "None"
-            elseif isLocalSurvivor then
-                role = "Survivor"
-                selectedTrack = GetValue("LMS_SurvTrack") or "None"
-            elseif isLocalKiller then
-                role = "Killer"
-                selectedTrack = GetValue("LMS_KillerTrack") or "None"
+            if IsCurrentMatch2v12 then
+                -- 2vs3
+                if isLocalKiller then
+                    role = "Killer"
+                    selectedTrack = GetValue("TwoVThree_KillerTrack") or "None"
+                    if selectedTrack == "None" then
+                        selectedTrack = GetValue("LMS_KillerTrack") or "None"
+                    end
+                else
+                    role = "Survivor"
+                    selectedTrack = GetValue("TwoVThree_SurvTrack") or "None"
+                    if selectedTrack == "None" then
+                        selectedTrack = GetValue("LMS_SurvTrack") or "None"
+                    end
+                end
             else
-                local cam = workspace.CurrentCamera
-                local subject = cam and cam.CameraSubject
-                local spectatedChar = subject and (subject:IsA("Humanoid") and subject.Parent or subject:IsA("Model") and subject)
-
-                if spectatedChar and spectatedChar:IsDescendantOf(killersFolder) then
+                if isLocalKiller then
                     role = "Killer"
                     selectedTrack = GetValue("LMS_KillerTrack") or "None"
                 else
@@ -1428,16 +1654,16 @@ task.spawn(function()
                     end
                 end
                 LMS_State.LMSActive = true
-                if lastSurv and lastSurv:IsA("Sound") then
-                    SuppressLMSAudio(lastSurv)
+                for _, s in ipairs(activeNativeSounds) do
+                    SuppressLMSAudio(s)
                 end
                 FadeLMSMuteBus(0, 0.4)
                 return
             end
 
             LMS_State.LMSActive = true
-            if lastSurv and lastSurv:IsA("Sound") then
-                SuppressLMSAudio(lastSurv)
+            for _, s in ipairs(activeNativeSounds) do
+                SuppressLMSAudio(s)
             end
             FadeLMSMuteBus(0, 0.4)
 
@@ -1674,7 +1900,7 @@ task.spawn(function()
     end
 
     local function SilenceThemesForCustomChase(fadeTime)
-        if not IsLocalKiller() or IsInLobby() then return end
+        if not CanRunChase() or IsInLobby() then return end
         
         local char = LocalPlayer.Character
         if char then
@@ -1847,38 +2073,8 @@ task.spawn(function()
 
     local function ResolveGameActiveLayer()
         if IsInLobby() then return 0 end
-        if not IsLocalKiller() then return 0 end
+        if not CanRunChase() then return 0 end
         if IsInCutscene() then return 0 end
-
-        local myChar = LocalPlayer.Character
-        if not myChar or myChar:GetAttribute("Dead") == true then return 0 end
-
-        local myRoot = myChar:FindFirstChild("HumanoidRootPart") or myChar.PrimaryPart
-        local survFolder = workspace.Players:FindFirstChild("Survivors")
-        if not myRoot or not survFolder then return 0 end
-
-        local survDistances = {}
-        local minD = 9999
-        for _, sChar in ipairs(survFolder:GetChildren()) do
-            local sHum = sChar:FindFirstChildOfClass("Humanoid")
-            local sRoot = sChar:FindFirstChild("HumanoidRootPart") or sChar.PrimaryPart
-            if sRoot and (not sHum or sHum.Health > 0) and sChar:GetAttribute("Dead") ~= true then
-                local d = (sRoot.Position - myRoot.Position).Magnitude
-                table.insert(survDistances, d)
-                if d < minD then
-                    minD = d
-                end
-            end
-        end
-        Chase_State.ClosestDistance = minD
-
-        local function CountInZone(radius)
-            local c = 0
-            for _, d in ipairs(survDistances) do
-                if d <= radius then c = c + 1 end
-            end
-            return c
-        end
 
         local hasLay1 = GetValue("Chase_HasLay1") == true
         local hasLay2 = GetValue("Chase_HasLay2") == true
@@ -1904,6 +2100,90 @@ task.spawn(function()
         local rLay2Absorbed  = hasLay1 and (rTotalSize + buffer) or (rLay2Base + buffer)
 
         local cur = Chase_State.CurrentLayer
+        local survDistances = {}
+        local minD = 9999
+
+        if IsLocalKiller() then
+            local myChar = LocalPlayer.Character
+            if not myChar or myChar:GetAttribute("Dead") == true then return 0 end
+            local myRoot = myChar:FindFirstChild("HumanoidRootPart") or myChar.PrimaryPart
+            local survFolder = workspace.Players:FindFirstChild("Survivors")
+            if not myRoot or not survFolder then return 0 end
+
+            for _, sChar in ipairs(survFolder:GetChildren()) do
+                local sHum = sChar:FindFirstChildOfClass("Humanoid")
+                local sRoot = sChar:FindFirstChild("HumanoidRootPart") or sChar.PrimaryPart
+                if sRoot and (not sHum or sHum.Health > 0) and sChar:GetAttribute("Dead") ~= true then
+                    local d = (sRoot.Position - myRoot.Position).Magnitude
+                    table.insert(survDistances, d)
+                    if d < minD then minD = d end
+                end
+            end
+        else
+            local killFolder = workspace.Players:FindFirstChild("Killers")
+            local survFolder = workspace.Players:FindFirstChild("Survivors")
+            if not killFolder or not survFolder then return 0 end
+
+            local activeKillers = {}
+            for _, kChar in ipairs(killFolder:GetChildren()) do
+                local kHum = kChar:FindFirstChildOfClass("Humanoid")
+                local kRoot = kChar:FindFirstChild("HumanoidRootPart") or kChar.PrimaryPart
+                if kRoot and (not kHum or kHum.Health > 0) and kChar:GetAttribute("Dead") ~= true then
+                    table.insert(activeKillers, kRoot)
+                end
+            end
+            if #activeKillers == 0 then return 0 end
+
+            local targetRoot = nil
+            local myChar = LocalPlayer.Character
+            local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+            local isAliveSurvivor = myChar and (myChar:GetAttribute("Dead") ~= true) and (myHum and myHum.Health > 0) and myChar:IsDescendantOf(survFolder)
+
+            if isAliveSurvivor then
+                targetRoot = myChar:FindFirstChild("HumanoidRootPart") or myChar.PrimaryPart
+            else
+                local cam = workspace.CurrentCamera
+                local subj = cam and cam.CameraSubject
+                local spectatedChar = subj and (subj:IsA("Humanoid") and subj.Parent or subj:IsA("Model") and subj)
+
+                if spectatedChar and spectatedChar:IsA("Model") then
+                    if spectatedChar:IsDescendantOf(killFolder) then
+                        local kRoot = spectatedChar:FindFirstChild("HumanoidRootPart") or spectatedChar.PrimaryPart
+                        if kRoot then
+                            for _, sChar in ipairs(survFolder:GetChildren()) do
+                                local sHum = sChar:FindFirstChildOfClass("Humanoid")
+                                local sRoot = sChar:FindFirstChild("HumanoidRootPart") or sChar.PrimaryPart
+                                if sRoot and (not sHum or sHum.Health > 0) and sChar:GetAttribute("Dead") ~= true then
+                                    local d = (sRoot.Position - kRoot.Position).Magnitude
+                                    table.insert(survDistances, d)
+                                    if d < minD then minD = d end
+                                end
+                            end
+                        end
+                    else
+                        targetRoot = spectatedChar:FindFirstChild("HumanoidRootPart") or spectatedChar.PrimaryPart
+                    end
+                end
+            end
+
+            if targetRoot then
+                for _, kRoot in ipairs(activeKillers) do
+                    local d = (kRoot.Position - targetRoot.Position).Magnitude
+                    if d < minD then minD = d end
+                end
+                table.insert(survDistances, minD)
+            end
+        end
+
+        Chase_State.ClosestDistance = minD
+
+        local function CountInZone(radius)
+            local c = 0
+            for _, d in ipairs(survDistances) do
+                if d <= radius then c = c + 1 end
+            end
+            return c
+        end
 
         -- HoldPlayerTrigger
         if cur == 4 then
@@ -1954,7 +2234,7 @@ task.spawn(function()
             return
         end
 
-        if not IsLocalKiller() then
+        if not CanRunChase() then
             if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
                 StopChaseAudio(true)
             end
@@ -2105,7 +2385,7 @@ task.spawn(function()
         local mod = GetChaseModule()
         if mod and mod.LayerChanged and typeof(mod.LayerChanged.Connect) == "function" then
             mod.LayerChanged:Connect(function(layer)
-                if not IsLocalKiller() or IsInLobby() then return end
+                if not CanRunChase() or IsInLobby() then return end
                 if not GetValue("Chase_Active") then return end
 
                 local rawLayer = tonumber(layer) or 0
@@ -2117,7 +2397,7 @@ task.spawn(function()
                 else
                     if Chase_State.CurrentLayer <= 0 and not (LMS_State and LMS_State.LMSActive) then
                         Chase_State.ThemesSilenced = false
-                        RestoreGameThemes()
+                        RestoreNativeChase()
                     end
                 end
             end)
@@ -2132,7 +2412,7 @@ task.spawn(function()
         end
         WasInLobbyState = inLobbyNow
 
-        if not IsLocalKiller() or inLobbyNow then
+        if not CanRunChase() or inLobbyNow then
             if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
                 StopChaseAudio(true)
             end
@@ -2141,6 +2421,26 @@ task.spawn(function()
 
         local activeLayer = ResolveGameActiveLayer()
         ApplyTargetLayer(activeLayer)
+
+        local isChaseRunning = GetValue("Chase_Active") and (Chase_State and Chase_State.CurrentLayer > 0)
+        local themes = workspace:FindFirstChild("Themes")
+
+        if isChaseRunning then
+            if themes then
+                for _, snd in ipairs(themes:GetChildren()) do
+                    if snd:IsA("Sound") and not IsSoundProtected(snd) and not IsLMSSound(snd) then
+                        if snd.SoundGroup ~= Chase_MuteBus then
+                            SuppressChaseAudio(snd)
+                        end
+                    end
+                end
+            end
+            FadeChaseMuteBus(0, 0.2)
+        else
+            if Chase_State and not Chase_State.ThemesSilenced and next(SuppressedChase) ~= nil then
+                RestoreNativeChase(0.4)
+            end
+        end
     end
 
     local function RefreshChaseDropdowns(notify)
@@ -2447,13 +2747,14 @@ task.spawn(function()
         local enabled = GetValue("GenIndicator_Enabled")
         local inLobby = IsInLobby()
         local camera = workspace.CurrentCamera
+        local activeMap = GameMap or (workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Ingame") and workspace.Map.Ingame:FindFirstChild("Map"))
 
-        if not enabled or inLobby or not GameMap or not camera then
+        if not enabled or inLobby or not activeMap or not camera then
             ClearAllGenBars()
             return
         end
 
-        local gens = GameMap:QueryDescendants("Model#Generator:has(#Main)")
+        local gens = activeMap:QueryDescendants("Model#Generator:has(#Main)")
         if #gens == 0 then
             ClearAllGenBars()
             return
@@ -2509,7 +2810,7 @@ task.spawn(function()
 
                 local distToCamera = (camPos - main.Position).Magnitude
                 local isTooClose = distToCamera <= minDistance
-                local isTooFar = distToCamera >= 1200
+                local isTooFar = distToCamera >= 1000
 
                 local shouldBeVisible = (not isFinishedHide) and (not isTooClose) and (not isTooFar)
 
@@ -2604,6 +2905,131 @@ task.spawn(function()
     end
 
     RunService.Heartbeat:Connect(UpdateGeneratorWorldBars)
+
+    if ColorPresets then
+        ColorPresets["Pink-Purple"] = Color3.fromRGB(235, 140, 255)
+    end
+
+    pcall(function()
+        RunService:UnbindFromRenderStep("FPlus_CustomCameraOffset")
+    end)
+
+    -- [ Vee Graffiti ESP ]
+    local GraffitiCache = {}
+
+    local function ClearGraffitiESP()
+        for _, data in pairs(GraffitiCache) do
+            if data then
+                if data.Highlight and data.Highlight.Parent then data.Highlight:Destroy() end
+                if data.Billboard and data.Billboard.Parent then data.Billboard:Destroy() end
+            end
+        end
+        table.clear(GraffitiCache)
+    end
+
+    local function UpdateVeeGraffitiESP()
+        local enabled = GetValue("VeeGraffiti_Enabled")
+        local inLobby = IsInLobby()
+        local camera = workspace.CurrentCamera
+        local camPos = camera and camera.CFrame.Position
+
+        if not enabled or inLobby or not camPos then
+            ClearGraffitiESP()
+            return
+        end
+
+        local colorKey = GetValue("VeeGraffiti_Color") or "Pink-Purple"
+        local espColor = ColorPresets[colorKey] or Color3.fromRGB(235, 140, 255)
+        local showText = GetValue("VeeGraffiti_ShowText") ~= false
+        local maxDist = 1000
+
+        local activeTargets = {}
+        local ingameFolder = InGame or (workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Ingame"))
+
+        if ingameFolder then
+            for _, child in ipairs(ingameFolder:GetChildren()) do
+                local isSprayModel = child:IsA("Model") and (child.Name:match("Spray$") or child:FindFirstChild("GraffitiCL"))
+
+                if isSprayModel then
+                    local targetHitbox = child:FindFirstChild("Hitbox") or child:FindFirstChildWhichIsA("BasePart")
+                    if targetHitbox and targetHitbox:IsA("BasePart") then
+                        activeTargets[targetHitbox] = true
+                        local dist = (camPos - targetHitbox.Position).Magnitude
+
+                        if dist <= maxDist then
+                            local data = GraffitiCache[targetHitbox]
+                            if not data or not data.Billboard or not data.Billboard.Parent then
+                                local hl = Instance.new("Highlight")
+                                hl.Name = HttpService:GenerateGUID(false):sub(1, 7)
+                                hl.Adornee = targetHitbox
+                                hl.FillColor = espColor
+                                hl.OutlineColor = espColor
+                                hl.FillTransparency = 0.5
+                                hl.OutlineTransparency = 0
+                                hl.Parent = targetHitbox
+
+                                local bb = Instance.new("BillboardGui")
+                                bb.Name = HttpService:GenerateGUID(false):sub(1, 7)
+                                bb.Adornee = targetHitbox
+                                bb.AlwaysOnTop = true
+                                bb.ResetOnSpawn = true
+                                bb.Size = UDim2.new(1.5, 60, 0.75, 25)
+                                bb.StudsOffset = Vector3.new(0, 4.2, 0)
+                                bb.Parent = targetHitbox
+
+                                local lbl = Instance.new("TextLabel")
+                                lbl.Name = "TextLabel"
+                                lbl.AnchorPoint = Vector2.new(0.5, 0.5)
+                                lbl.Position = UDim2.fromScale(0.5, 0.5)
+                                lbl.Size = UDim2.fromScale(1, 1)
+                                lbl.BackgroundTransparency = 1
+                                lbl.TextScaled = true
+                                lbl.TextSize = 8
+                                lbl.TextColor3 = espColor
+                                lbl.TextStrokeTransparency = 0
+                                lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+                                lbl.Text = "Vee Graffiti"
+                                lbl.Parent = bb
+
+                                data = { Highlight = hl, Billboard = bb, Label = lbl }
+                                GraffitiCache[targetHitbox] = data
+                            end
+
+                            data.Highlight.FillColor = espColor
+                            data.Highlight.OutlineColor = espColor
+                            data.Highlight.Enabled = true
+                            data.Billboard.Enabled = showText
+                            data.Label.TextColor3 = espColor
+                            data.Label.Text = "Vee Graffiti"
+
+                            if dist <= 8 or dist >= maxDist then
+                                data.Label.TextTransparency = 1
+                                data.Label.TextStrokeTransparency = 1
+                            else
+                                data.Label.TextTransparency = 0
+                                data.Label.TextStrokeTransparency = 0
+                            end
+                        else
+                            if GraffitiCache[targetHitbox] then
+                                if GraffitiCache[targetHitbox].Highlight then GraffitiCache[targetHitbox].Highlight.Enabled = false end
+                                if GraffitiCache[targetHitbox].Billboard then GraffitiCache[targetHitbox].Billboard.Enabled = false end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        for targetHitbox, data in pairs(GraffitiCache) do
+            if not activeTargets[targetHitbox] or not targetHitbox.Parent then
+                if data.Highlight and data.Highlight.Parent then data.Highlight:Destroy() end
+                if data.Billboard and data.Billboard.Parent then data.Billboard:Destroy() end
+                GraffitiCache[targetHitbox] = nil
+            end
+        end
+    end
+
+    RunService.Heartbeat:Connect(UpdateVeeGraffitiESP)
 
     -- [ UI Package Definition ]
     local AddonsPackage = {
@@ -2870,6 +3296,37 @@ task.spawn(function()
                 ["ExtraData"] = { ["MinValue"] = 10, ["MaxValue"] = 60, ["Step"] = 5 }
             }
         },
+        ["Visual_VeeGraffiti"] = {
+            ["TabAttributes"] = {
+                ["DisplayTitle"] = "Vee Graffiti ESP",
+                ["LayoutOrder"] = 109
+            },
+            ["VeeGraffiti_Enabled"] = {
+                ["DisplayDescription"] = "Highlights all of Veeronica's spray paint and graffiti marks through walls",
+                ["DisplayTitle"] = "Enable Graffiti ESP",
+                ["LayoutOrder"] = 1,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true
+            },
+            ["VeeGraffiti_ShowText"] = {
+                ["DisplayDescription"] = "Shows clean text name above graffiti marks (Forsaken+ style)",
+                ["DisplayTitle"] = "Show Text Label",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true
+            },
+            ["VeeGraffiti_Color"] = {
+                ["DisplayDescription"] = "Color palette for graffiti highlights and text",
+                ["DisplayTitle"] = "Graffiti ESP Color",
+                ["LayoutOrder"] = 3,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "Pink-Purple",
+                ["ExtraData"] = { ["Options"] = "Pink-Purple|Purple|Cyan|Green|Gold|Red|White" }
+            }
+        },
         ["Fun_Credits"] = {
             ["TabAttributes"] = {
                 ["DisplayTitle"] = "Mod Made " .. RichTextGradientColor("by doomsenseteam/R3cup", {
@@ -2981,13 +3438,48 @@ task.spawn(function()
             }
         },
 
+        ["Custom_2v3"] = {
+            ["TabAttributes"] = {
+                ["DisplayTitle"] = "2vs3: Audio Engine",
+                ["LayoutOrder"] = 100.5
+            },
+            ["TwoVThree_SurvTrack"] = {
+                ["DisplayDescription"] = "Select Survivor 2vs3 audio file (Choose 'Off' to keep original game theme)",
+                ["DisplayTitle"] = "Survivor: 2vs3 Audio File",
+                ["LayoutOrder"] = 1,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "None",
+                ["ExtraData"] = { ["Options"] = initSurv },
+                ["ScriptFunction"] = function(self, val)
+                    if LMS_State.LMSActive then
+                        CheckTrueLMS()
+                    end
+                end
+            },
+            ["TwoVThree_KillerTrack"] = {
+                ["DisplayDescription"] = "Select Killer 2vs3 audio file (Choose 'Off' to keep original game theme)",
+                ["DisplayTitle"] = "Killer: 2vs3 Audio File",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "None",
+                ["ExtraData"] = { ["Options"] = initKill },
+                ["ScriptFunction"] = function(self, val)
+                    if LMS_State.LMSActive then
+                        CheckTrueLMS()
+                    end
+                end
+            }
+        },
+
         ["Custom_LMS_Visuals"] = {
             ["TabAttributes"] = {
-                ["DisplayTitle"] = "Custom LMS: Visual Intro & Effects",
+                ["DisplayTitle"] = "Custom LMS / 2vs3: Visual Intro & Effects",
                 ["LayoutOrder"] = 101
             },
             ["LMS_StartEffect"] = {
-                ["DisplayDescription"] = "Select visual intro effect when LMS begins",
+                ["DisplayDescription"] = "Select visual intro effect when LMS / 2vs3 begins",
                 ["DisplayTitle"] = "Start Effect",
                 ["LayoutOrder"] = 1,
                 ["Savable"] = true,
@@ -3040,11 +3532,11 @@ task.spawn(function()
 
         ["Custom_Chase"] = {
             ["TabAttributes"] = {
-                ["DisplayTitle"] = "Custom Chase: Audio Engine (Killer Only)",
+                ["DisplayTitle"] = "Custom Chase: Audio Engine",
                 ["LayoutOrder"] = 102
             },
             ["Chase_Active"] = {
-                ["DisplayDescription"] = "Enable custom chase and dynamic terror radius audio (Only functions when you are Killer)",
+                ["DisplayDescription"] = "Enable custom chase and dynamic terror radius audio",
                 ["DisplayTitle"] = "Enable Chase Engine",
                 ["LayoutOrder"] = 1,
                 ["Savable"] = true,
@@ -3053,6 +3545,21 @@ task.spawn(function()
                 ["ScriptFunction"] = function(self, val)
                     if not val then
                         StopChaseAudio(false)
+                    else
+                        SyncChaseAudio()
+                    end
+                end
+            },
+            ["Chase_SurvivorMode"] = {
+                ["DisplayDescription"] = "Allows Custom Chase/Layers to work while playing as Survivor or Spectating",
+                ["DisplayTitle"] = "Survivor / Spectator Mode",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    if not val and not IsLocalKiller() then
+                        StopChaseAudio(true)
                     else
                         SyncChaseAudio()
                     end
@@ -3491,7 +3998,9 @@ task.spawn(function()
 
     HandleUIFeatures("Visual_NightMode", AddonsPackage["Visual_NightMode"])
     HandleUIFeatures("Visual_Generators", AddonsPackage["Visual_Generators"])
+    HandleUIFeatures("Visual_VeeGraffiti", AddonsPackage["Visual_VeeGraffiti"])
     HandleUIFeatures("Custom_LMS", AddonsPackage["Custom_LMS"])
+    HandleUIFeatures("Custom_2v3", AddonsPackage["Custom_2v3"])
     HandleUIFeatures("Custom_LMS_Visuals", AddonsPackage["Custom_LMS_Visuals"])
     HandleUIFeatures("Custom_Chase", AddonsPackage["Custom_Chase"])
     HandleUIFeatures("Fun_Wheel", AddonsPackage["Fun_Wheel"])
@@ -3506,7 +4015,6 @@ task.spawn(function()
     end)
     task.wait(0.1)
 
-    -- [ Tab Rail & Canvas Dynamic Length Setup ]
     local TWEEN = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
     local HOVER_TWEEN = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
     local CONE_OUT = TweenInfo.new(0.32, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
@@ -3705,8 +4213,8 @@ task.spawn(function()
         for _, item in ipairs(ContentsScrolling:GetChildren()) do
             if item:IsA("GuiObject") and not item:IsA("UIListLayout") and not item:IsA("UIPadding") and item ~= CanvasAutoSpacer then
                 local ownerTab = FastGetItemTab(item)
-                local isVisualItem = (ownerTab == "Visual_NightMode" or ownerTab == "Visual_Generators")
-                local isMusicItem = (ownerTab == "Custom_LMS" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase")
+                local isVisualItem = (ownerTab == "Visual_NightMode" or ownerTab == "Visual_Generators" or ownerTab == "Visual_Camera" or ownerTab == "Visual_VeeGraffiti")
+                local isMusicItem = (ownerTab == "Custom_LMS" or ownerTab == "Custom_2v3" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase")
                 local isFunItem = (ownerTab == "Fun_Wheel" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
 
                 if tabKey == "Main" then
@@ -3933,7 +4441,7 @@ task.spawn(function()
         for _, item in ipairs(ContentsScrolling:GetChildren()) do
             if item:IsA("GuiObject") and not item:IsA("UIListLayout") and not item:IsA("UIPadding") and item ~= CanvasAutoSpacer then
                 local ownerTab = FastGetItemTab(item)
-                local isAddonItem = (ownerTab == "Visual_NightMode" or ownerTab == "Visual_Generators" or ownerTab == "Custom_LMS" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase" or ownerTab == "Fun_Wheel" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
+                local isAddonItem = (ownerTab == "Visual_NightMode" or ownerTab == "Visual_Generators" or ownerTab == "Visual_VeeGraffiti" or ownerTab == "Custom_LMS" or ownerTab == "Custom_2v3" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase" or ownerTab == "Fun_Wheel" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
                 if not isAddonItem and SavedOriginalVisibility[item] == nil then
                     SavedOriginalVisibility[item] = item.Visible
                 end
