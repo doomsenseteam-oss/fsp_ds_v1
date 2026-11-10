@@ -168,20 +168,42 @@ task.spawn(function()
     end
 
     local function IsInLobby()
-        local map = workspace:FindFirstChild("Map")
-        if not map or not map:FindFirstChild("Ingame") then return true end
+        local char = LocalPlayer.Character
+        local survivors = workspace.Players:FindFirstChild("Survivors")
+        local killers = workspace.Players:FindFirstChild("Killers")
+        if char then
+            if survivors and char:IsDescendantOf(survivors) then return false end
+            if killers and char:IsDescendantOf(killers) then return false end
+        end
 
-        if IsSpectating() then return false end
+        if MainUI and MainUI:FindFirstChild("AbilityContainer") then
+            return false
+        end
+
+        local rTimer = ReplicatedStorage:FindFirstChild("RoundTimer")
+        if rTimer then
+            local timerVal = tostring(rTimer.Value)
+            if timerVal == "Round begins in:" or timerVal == "Waiting for more players." then
+                return true
+            end
+        end
 
         local themes = workspace:FindFirstChild("Themes")
-        if themes and themes:FindFirstChild("Lobby") and themes.Lobby:IsA("Sound") and themes.Lobby.IsPlaying then
+        local lobbySound = themes and (themes:FindFirstChild("lobby") or themes:FindFirstChild("Lobby"))
+        if lobbySound and lobbySound:IsA("Sound") and lobbySound.IsPlaying then
             return true
         end
 
-        local sideBar = MainUI:FindFirstChild("Sidebar")
-        if sideBar and sideBar:GetAttribute("WasVisible") == true then return true end
+        local sideBar = MainUI and MainUI:FindFirstChild("Sidebar")
+        if sideBar and sideBar:GetAttribute("WasVisible") == true then
+            return true
+        end
 
-        return false
+        if rTimer and tostring(rTimer.Value) == "Round ends in:" then
+            return false
+        end
+
+        return true
     end
 
     local function IsLocalKiller()
@@ -3042,7 +3064,7 @@ task.spawn(function()
                 ["DisplayDescription"] = "",
                 ["DisplayTitle"] = "Enable Night Mode",
                 ["LayoutOrder"] = 1,
-                ["Savable"] = true,
+                ["Savable"] = false,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false,
                 ["ScriptFunction"] = function(self, val)
@@ -3055,7 +3077,8 @@ task.spawn(function()
                 ["LayoutOrder"] = 2,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
-                ["DefaultInstanceValue"] = true,
+                ["DefaultInstanceValue"] = false,
+                ["Requirement"] = "Night_Enabled",
                 ["ScriptFunction"] = function(self, val)
                     if GetValue("Night_Enabled") then
                         ApplyNightLighting()
