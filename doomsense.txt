@@ -1,4 +1,4 @@
--- by r3cup, doomsense  v1.2
+-- by r3cup, doomsense  v1.2.1
 
 task.spawn(function()
     _G.ForsakenPlus_CustomRailLoaded = true
