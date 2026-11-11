@@ -70,7 +70,11 @@ task.spawn(function()
 
     local function FadeChaseMuteBus(targetVol, duration)
         if Chase_MuteTween then Chase_MuteTween:Cancel(); Chase_MuteTween = nil end
-        local dur = math.clamp(duration or 0.6, 0.05, 3.0)
+        local dur = duration or 0
+        if dur <= 0.05 then
+            Chase_MuteBus.Volume = targetVol
+            return
+        end
         Chase_MuteTween = TweenService:Create(Chase_MuteBus, TweenInfo.new(dur, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = targetVol })
         Chase_MuteTween:Play()
     end
@@ -108,8 +112,7 @@ task.spawn(function()
 
     local function SuppressChaseAudio(snd)
         if not snd or not snd:IsA("Sound") or snd.Name:find("Custom_") then return end
-        local nameLow = snd.Name:lower()
-        if nameLow:find("lobby") or IsLMSSound(snd) then return end
+        if IsLMSSound(snd) then return end
 
         if not SuppressedChase[snd] then
             SuppressedChase[snd] = { OriginalGroup = snd.SoundGroup }
@@ -141,22 +144,12 @@ task.spawn(function()
     end
 
     local function IsSpectating()
-        local map = workspace:FindFirstChild("Map")
-        if not map or not map:FindFirstChild("Ingame") then return false end
-
-        local char = LocalPlayer.Character
-        local specFolder = workspace.Players:FindFirstChild("Spectating")
-        if specFolder and char and char:IsDescendantOf(specFolder) then
-            return true
-        end
-        if char and char.Parent and char.Parent.Name:lower():find("spectat") then
-            return true
-        end
-
         local cam = workspace.CurrentCamera
         local subj = cam and cam.CameraSubject
-        local target = subj and (subj:IsA("Humanoid") and subj.Parent or subj:IsA("Model") and subj)
-        if target and target:IsA("Model") and target ~= char then
+        local target = subj and (subj:IsA("Humanoid") and subj.Parent or subj:IsA("BasePart") and subj.Parent or subj:IsA("Model") and subj)
+        local myChar = LocalPlayer.Character
+
+        if target and target:IsA("Model") and target ~= myChar then
             local survFolder = workspace.Players:FindFirstChild("Survivors")
             local killFolder = workspace.Players:FindFirstChild("Killers")
             if (survFolder and target:IsDescendantOf(survFolder)) or (killFolder and target:IsDescendantOf(killFolder)) then
@@ -168,42 +161,85 @@ task.spawn(function()
     end
 
     local function IsInLobby()
+        local map = workspace:FindFirstChild("Map")
+        local ingame = map and map:FindFirstChild("Ingame")
+        local liveMap = ingame and ingame:FindFirstChild("Map")
+        if not liveMap then
+            return true
+        end
+
+        if IsSpectating() then return false end
+
         local char = LocalPlayer.Character
         local survivors = workspace.Players:FindFirstChild("Survivors")
         local killers = workspace.Players:FindFirstChild("Killers")
+        local ragdolls = workspace:FindFirstChild("Ragdolls")
+        local spectating = workspace.Players:FindFirstChild("Spectating")
+
         if char then
             if survivors and char:IsDescendantOf(survivors) then return false end
             if killers and char:IsDescendantOf(killers) then return false end
+            if ragdolls and char:IsDescendantOf(ragdolls) then return false end
+            if spectating and char:IsDescendantOf(spectating) then return false end
         end
 
         if MainUI and MainUI:FindFirstChild("AbilityContainer") then
             return false
         end
 
-        local rTimer = ReplicatedStorage:FindFirstChild("RoundTimer")
-        if rTimer then
-            local timerVal = tostring(rTimer.Value)
-            if timerVal == "Round begins in:" or timerVal == "Waiting for more players." then
-                return true
+        return false
+    end
+
+    local function GetMatchEntitiesCount()
+        local killFolder = workspace.Players:FindFirstChild("Killers")
+        local survFolder = workspace.Players:FindFirstChild("Survivors")
+        local specFolder = workspace.Players:FindFirstChild("Spectating")
+
+        local activeKillers = 0
+        if killFolder then
+            for _, k in ipairs(killFolder:GetChildren()) do
+                if k:IsA("Model") and k:GetAttribute("Dead") ~= true then
+                    local h = k:FindFirstChildOfClass("Humanoid")
+                    local inSpec = specFolder and k:IsDescendantOf(specFolder)
+                    if (not h or h.Health > 0) and not inSpec then
+                        activeKillers = activeKillers + 1
+                    end
+                end
             end
         end
 
-        local themes = workspace:FindFirstChild("Themes")
-        local lobbySound = themes and (themes:FindFirstChild("lobby") or themes:FindFirstChild("Lobby"))
-        if lobbySound and lobbySound:IsA("Sound") and lobbySound.IsPlaying then
-            return true
+        local activeSurvivors = 0
+        local totalSurvivors = 0
+        if survFolder then
+            for _, s in ipairs(survFolder:GetChildren()) do
+                if s:IsA("Model") then
+                    totalSurvivors = totalSurvivors + 1
+                    local h = s:FindFirstChildOfClass("Humanoid")
+                    local isDead = (s:GetAttribute("Dead") == true) or (h and h.Health <= 0)
+                    local inSpec = specFolder and s:IsDescendantOf(specFolder)
+                    if not isDead and not inSpec then
+                        activeSurvivors = activeSurvivors + 1
+                    end
+                end
+            end
         end
 
-        local sideBar = MainUI and MainUI:FindFirstChild("Sidebar")
-        if sideBar and sideBar:GetAttribute("WasVisible") == true then
-            return true
-        end
+        return activeKillers, activeSurvivors, totalSurvivors
+    end
 
-        if rTimer and tostring(rTimer.Value) == "Round ends in:" then
-            return false
+    local function IsTwoKillersMode()
+        local killFolder = workspace.Players:FindFirstChild("Killers")
+        if not killFolder then return false end
+        local activeKillers = 0
+        for _, k in ipairs(killFolder:GetChildren()) do
+            if k:IsA("Model") and k:GetAttribute("Dead") ~= true then
+                local h = k:FindFirstChildOfClass("Humanoid")
+                if not h or h.Health > 0 then
+                    activeKillers = activeKillers + 1
+                end
+            end
         end
-
-        return true
+        return activeKillers >= 2
     end
 
     local function IsLocalKiller()
@@ -228,45 +264,10 @@ task.spawn(function()
         return false
     end
 
-    local IsCurrentMatch2v12 = false
-    task.spawn(function()
-        while true do
-            task.wait(2)
-            if IsInLobby() then
-                IsCurrentMatch2v12 = false
-            else
-                local gm = workspace:GetAttribute("Gamemode") or workspace:GetAttribute("ForcedServerGamemode") or workspace:GetAttribute("ServerGamemode")
-                if gm and tostring(gm):lower():find("2v12") then
-                    IsCurrentMatch2v12 = true
-                else
-                    local killFolder = workspace.Players:FindFirstChild("Killers")
-                    if killFolder then
-                        local distinctKillers = 0
-                        for _, k in ipairs(killFolder:GetChildren()) do
-                            if k:IsA("Model") and k:GetAttribute("Dead") ~= true then
-                                local h = k:FindFirstChildOfClass("Humanoid")
-                                if not h or h.Health > 0 then
-                                    local isPlayer = Players:GetPlayerFromCharacter(k) ~= nil
-                                    local isBoss = h and h.MaxHealth >= 500
-                                    if isPlayer or isBoss then
-                                        distinctKillers = distinctKillers + 1
-                                    end
-                                end
-                            end
-                        end
-                        IsCurrentMatch2v12 = (distinctKillers >= 2)
-                    else
-                        IsCurrentMatch2v12 = false
-                    end
-                end
-            end
-        end
-    end)
-
     local function IsSoundProtected(snd)
         if not snd or not snd:IsA("Sound") or snd.Name:find("Custom_") then return true end
         local nameLow = snd.Name:lower()
-        if nameLow:find("lobby") or nameLow:find("execution") or nameLow:find("intro") 
+        if nameLow:find("execution") or nameLow:find("intro") 
             or nameLow:find("victory") or nameLow:find("scare") then
             return true
         end
@@ -288,10 +289,10 @@ task.spawn(function()
                     FadeLMSMuteBus(0, 0.2)
                 end
             else
-                local isChaseOn = not inLobby and CanRunChase() and (Chase_State and Chase_State.CurrentLayer > 0)
+                local isChaseOn = not inLobby and CanRunChase() and (Chase_State and (Chase_State.CurrentLayer > 0 or Chase_State.ThemesSilenced))
                 if isChaseOn then
                     SuppressChaseAudio(child)
-                    FadeChaseMuteBus(0, 0.2)
+                    FadeChaseMuteBus(0, 0)
                 end
             end
         end)
@@ -735,6 +736,7 @@ task.spawn(function()
         UpdateDropdownOptions("TwoVThree_SurvTrack", sOpts)
         UpdateDropdownOptions("TwoVThree_KillerTrack", kOpts)
         UpdateDropdownOptions("Chase_Track", cOpts)
+        UpdateDropdownOptions("Chase_SurvTrack", cOpts)
 
         if notify and typeof(ColoredPrint) == "function" then
             ColoredPrint("Audio Library Rescanned Successfully!", "success", Color3.fromRGB(0, 255, 128))
@@ -996,90 +998,65 @@ task.spawn(function()
         local container = GetFXGui()
         local survFolder = workspace.Players:FindFirstChild("Survivors")
         local killFolder = workspace.Players:FindFirstChild("Killers")
+        local specFolder = workspace.Players:FindFirstChild("Spectating")
 
-        local survModel, killModel = nil, nil
         local myChar = LocalPlayer.Character
         local myRole = DetectRole(myChar)
 
-        local spectatingFolder = workspace.Players:FindFirstChild("Spectating")
-
         local function IsModelAlive(m)
             if not m or not m:IsA("Model") or not m.Parent then return false end
-            if spectatingFolder and m:IsDescendantOf(spectatingFolder) then return false end
+            if specFolder and m:IsDescendantOf(specFolder) then return false end
             if m:GetAttribute("Dead") == true then return false end
             local h = m:FindFirstChildOfClass("Humanoid")
-            return h and h.Health > 0
+            return not h or h.Health > 0
         end
+
+        local survModels = {}
+        local killModels = {}
 
         if killFolder then
             for _, c in ipairs(killFolder:GetChildren()) do
-                if IsModelAlive(c) and Players:GetPlayerFromCharacter(c) then
-                    killModel = c
-                    break
-                end
-            end
-            if not killModel then
-                for _, c in ipairs(killFolder:GetChildren()) do
-                    if IsModelAlive(c) then killModel = c break end
+                if IsModelAlive(c) then
+                    table.insert(killModels, c)
+                    if #killModels >= 2 then break end
                 end
             end
         end
 
         if survFolder then
             for _, c in ipairs(survFolder:GetChildren()) do
-                if IsModelAlive(c) and Players:GetPlayerFromCharacter(c) then
-                    survModel = c
-                    break
-                end
-            end
-            if not survModel then
-                for _, c in ipairs(survFolder:GetChildren()) do
-                    if IsModelAlive(c) then survModel = c break end
+                if IsModelAlive(c) then
+                    table.insert(survModels, c)
+                    if #survModels >= 3 then break end
                 end
             end
         end
 
-        if isTest then
-            if myRole == "Killer" then
-                killModel = myChar
-            elseif myRole == "Survivor" then
-                survModel = myChar
-            end
+        local isMode2v12 = (#killModels >= 2) or (isTest and (GetValue("TwoVThree_SurvTrack") ~= "None" or GetValue("TwoVThree_KillerTrack") ~= "None"))
+
+        if #survModels == 0 and myChar and myRole == "Survivor" then
+            table.insert(survModels, myChar)
+        end
+        if #killModels == 0 and myChar and myRole == "Killer" then
+            table.insert(killModels, myChar)
         end
 
-        if killModel and survFolder and killModel:IsDescendantOf(survFolder) then
-            killModel = nil
-        end
-        if survModel and killFolder and survModel:IsDescendantOf(killFolder) then
-            survModel = nil
-        end
-
-        local isMode2v12 = IsCurrentMatch2v12
-        local survModels = {}
-        local killModels = {}
-
-        if isMode2v12 then
-            if survFolder then
-                for _, c in ipairs(survFolder:GetChildren()) do
-                    if IsModelAlive(c) and not (killFolder and c:IsDescendantOf(killFolder)) then
-                        table.insert(survModels, c)
-                        if #survModels >= 3 then break end
-                    end
+        if #survModels == 0 and survFolder then
+            for _, c in ipairs(survFolder:GetChildren()) do
+                if c:IsA("Model") then
+                    table.insert(survModels, c)
+                    if #survModels >= (isMode2v12 and 3 or 1) then break end
                 end
             end
-            if killFolder then
-                for _, c in ipairs(killFolder:GetChildren()) do
-                    if IsModelAlive(c) and not (survFolder and c:IsDescendantOf(survFolder)) then
-                        table.insert(killModels, c)
-                        if #killModels >= 2 then break end
-                    end
+        end
+
+        if #killModels == 0 and killFolder then
+            for _, c in ipairs(killFolder:GetChildren()) do
+                if c:IsA("Model") then
+                    table.insert(killModels, c)
+                    if #killModels >= (isMode2v12 and 2 or 1) then break end
                 end
             end
-            if #survModels == 0 and survModel then table.insert(survModels, survModel) end
-            if #killModels == 0 and killModel then table.insert(killModels, killModel) end
-        else
-            if survModel then table.insert(survModels, survModel) end
-            if killModel then table.insert(killModels, killModel) end
         end
 
         local MainFrame = Instance.new("Frame", container)
@@ -1543,7 +1520,6 @@ task.spawn(function()
         local allowLobbyAudio = (GetValue("LMS_LobbyAudio") == true)
 
         local survivorsFolder = workspace.Players:FindFirstChild("Survivors")
-        local spectatingFolder = workspace.Players:FindFirstChild("Spectating")
         local killersFolder = workspace.Players:FindFirstChild("Killers")
 
         if not survivorsFolder or not killersFolder then
@@ -1581,32 +1557,26 @@ task.spawn(function()
             end
         end
 
-        local activeSurvivors = 0
-        local totalSurvivors = 0
+        local activeKillers, activeSurvivors, totalSurvivors = GetMatchEntitiesCount()
+        local is2v3Mode = (activeKillers >= 2)
 
-        for _, char in ipairs(survivorsFolder:GetChildren()) do
-            totalSurvivors = totalSurvivors + 1
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            local isDead = (char:GetAttribute("Dead") == true) or (hum and hum.Health <= 0)
-            local isSpectating = spectatingFolder and char:IsDescendantOf(spectatingFolder)
-
-            if not isDead and not isSpectating then
-                activeSurvivors = activeSurvivors + 1
-            end
+        local hasActiveMatch = false
+        local ingameMap = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Ingame") and workspace.Map.Ingame:FindFirstChild("Map")
+        local roundTimer = ReplicatedStorage:FindFirstChild("RoundTimer")
+        if ingameMap or (roundTimer and roundTimer.Value == "Round ends in:") or (activeKillers > 0 and totalSurvivors > 0) then
+            hasActiveMatch = true
         end
 
         local isLMS = false
-        if IsCurrentMatch2v12 then
-            if isNativeLMS and activeSurvivors <= 3 and activeSurvivors >= 1 then
-                isLMS = true
-            elseif activeSurvivors <= 3 and activeSurvivors >= 1 and totalSurvivors > 3 and not inLobby then
-                isLMS = true
-            end
-        else
-            if isNativeLMS and activeSurvivors == 1 then
-                isLMS = true
-            elseif activeSurvivors == 1 and totalSurvivors > 1 and not inLobby then
-                isLMS = true
+        if hasActiveMatch and activeKillers > 0 then
+            if is2v3Mode then
+                if isNativeLMS or (activeSurvivors <= 3 and activeSurvivors >= 1) then
+                    isLMS = true
+                end
+            else
+                if isNativeLMS or (activeSurvivors == 1) then
+                    isLMS = true
+                end
             end
         end
 
@@ -1620,8 +1590,7 @@ task.spawn(function()
             local role = "Survivor"
             local selectedTrack = "None"
 
-            if IsCurrentMatch2v12 then
-                -- 2vs3
+            if is2v3Mode then
                 if isLocalKiller then
                     role = "Killer"
                     selectedTrack = GetValue("TwoVThree_KillerTrack") or "None"
@@ -1687,6 +1656,13 @@ task.spawn(function()
             for _, s in ipairs(activeNativeSounds) do
                 SuppressLMSAudio(s)
             end
+            if inLobby and allowLobbyAudio and themes then
+                for _, lSnd in ipairs(themes:GetChildren()) do
+                    if lSnd:IsA("Sound") and (lSnd.Name:lower():find("lobby") or lSnd.Name:lower():find("ambience")) then
+                        SuppressLMSAudio(lSnd)
+                    end
+                end
+            end
             FadeLMSMuteBus(0, 0.4)
 
             -- Hotswap
@@ -1721,7 +1697,7 @@ task.spawn(function()
         else
             if LMS_State.IsTriggered or LMS_State.LMSActive then
                 if not LMS_State.StopAt then
-                    LMS_State.StopAt = os.clock() + 1.5
+                    LMS_State.StopAt = os.clock() + 1.2
                 elseif os.clock() >= LMS_State.StopAt then
                     StopLMS(false)
                 end
@@ -1732,6 +1708,7 @@ task.spawn(function()
     -- [ Custom Chase Engine ]
     local RoundSpawnTime = 0
     local WasInLobbyState = true
+    local StopChaseAudio = nil
 
     local function HookKillerDeath(char)
         if not char then return end
@@ -1842,6 +1819,14 @@ task.spawn(function()
             HasLay2 = GetValue("Chase_HasLay2") == true,
             HasLay3 = GetValue("Chase_HasLay3") == true,
             HasChase = GetValue("Chase_HasChase") ~= false,
+            FadeIn_Chase = GetValue("Chase_FadeIn_Chase") ~= false,
+            FadeOut_Chase = GetValue("Chase_FadeOut_Chase") ~= false,
+            FadeIn_Lay3 = GetValue("Chase_FadeIn_Lay3") ~= false,
+            FadeOut_Lay3 = GetValue("Chase_FadeOut_Lay3") ~= false,
+            FadeIn_Lay2 = GetValue("Chase_FadeIn_Lay2") ~= false,
+            FadeOut_Lay2 = GetValue("Chase_FadeOut_Lay2") ~= false,
+            FadeIn_Lay1 = GetValue("Chase_FadeIn_Lay1") ~= false,
+            FadeOut_Lay1 = GetValue("Chase_FadeOut_Lay1") ~= false,
         }
 
         pcall(function()
@@ -1910,12 +1895,24 @@ task.spawn(function()
             if data.HasLay3 ~= nil then ApplyVal("Chase_HasLay3", data.HasLay3) else ApplyVal("Chase_HasLay3", timings.Lay3 ~= nil) end
             if data.HasChase ~= nil then ApplyVal("Chase_HasChase", data.HasChase) else ApplyVal("Chase_HasChase", true) end
 
+            if data.FadeIn_Chase ~= nil then ApplyVal("Chase_FadeIn_Chase", data.FadeIn_Chase) else ApplyVal("Chase_FadeIn_Chase", true) end
+            if data.FadeOut_Chase ~= nil then ApplyVal("Chase_FadeOut_Chase", data.FadeOut_Chase) else ApplyVal("Chase_FadeOut_Chase", true) end
+            if data.FadeIn_Lay3 ~= nil then ApplyVal("Chase_FadeIn_Lay3", data.FadeIn_Lay3) else ApplyVal("Chase_FadeIn_Lay3", true) end
+            if data.FadeOut_Lay3 ~= nil then ApplyVal("Chase_FadeOut_Lay3", data.FadeOut_Lay3) else ApplyVal("Chase_FadeOut_Lay3", true) end
+            if data.FadeIn_Lay2 ~= nil then ApplyVal("Chase_FadeIn_Lay2", data.FadeIn_Lay2) else ApplyVal("Chase_FadeIn_Lay2", true) end
+            if data.FadeOut_Lay2 ~= nil then ApplyVal("Chase_FadeOut_Lay2", data.FadeOut_Lay2) else ApplyVal("Chase_FadeOut_Lay2", true) end
+            if data.FadeIn_Lay1 ~= nil then ApplyVal("Chase_FadeIn_Lay1", data.FadeIn_Lay1) else ApplyVal("Chase_FadeIn_Lay1", true) end
+            if data.FadeOut_Lay1 ~= nil then ApplyVal("Chase_FadeOut_Lay1", data.FadeOut_Lay1) else ApplyVal("Chase_FadeOut_Lay1", true) end
+
             task.delay(0.1, function() IsConfigLoading = false end)
         end
     end
 
     local function OnChaseSettingModified()
-        local curTrack = GetValue("Chase_Track")
+        local curTrack = IsLocalKiller() and GetValue("Chase_Track") or GetValue("Chase_SurvTrack")
+        if not curTrack or curTrack == "None" or curTrack == "Off" then
+            curTrack = GetValue("Chase_Track")
+        end
         if curTrack and curTrack ~= "None" and curTrack ~= "Off" then
             SaveTrackConfig(curTrack)
         end
@@ -1930,19 +1927,49 @@ task.spawn(function()
         end
 
         local themes = workspace:FindFirstChild("Themes")
-        if not themes then return end
-
-        for _, snd in ipairs(themes:GetChildren()) do
-            if snd:IsA("Sound") and not IsSoundProtected(snd) and not IsLMSSound(snd) then
-                SuppressChaseAudio(snd)
+        if themes then
+            for _, snd in ipairs(themes:GetChildren()) do
+                if snd:IsA("Sound") and not IsSoundProtected(snd) and not IsLMSSound(snd) then
+                    SuppressChaseAudio(snd)
+                end
             end
         end
 
-        local dur = fadeTime or (tonumber(GetValue("Chase_FadeTime")) or 0.6)
-        FadeChaseMuteBus(0, dur)
+        FadeChaseMuteBus(0, 0)
     end
 
-    local function StopChaseAudio(instant, keepNativeMuted)
+    local function ShouldFadeIn(tier)
+        if not tier then return true end
+        local t = tier:lower()
+        if t:find("chase") then
+            return GetValue("Chase_FadeIn_Chase") ~= false
+        elseif t:find("lay3") then
+            return GetValue("Chase_FadeIn_Lay3") ~= false
+        elseif t:find("lay2") then
+            return GetValue("Chase_FadeIn_Lay2") ~= false
+        elseif t:find("lay1") then
+            return GetValue("Chase_FadeIn_Lay1") ~= false
+        end
+        return true
+    end
+
+    local function ShouldFadeOut(tier)
+        if not tier then return true end
+        local t = tier:lower()
+        if t:find("chase") then
+            return GetValue("Chase_FadeOut_Chase") ~= false
+        elseif t:find("lay3") then
+            return GetValue("Chase_FadeOut_Lay3") ~= false
+        elseif t:find("lay2") then
+            return GetValue("Chase_FadeOut_Lay2") ~= false
+        elseif t:find("lay1") then
+            return GetValue("Chase_FadeOut_Lay1") ~= false
+        end
+        return true
+    end
+
+    StopChaseAudio = function(instant, keepNativeMuted)
+        local curTier = Chase_State.CurrentTierName
         Chase_State.CurrentLayer = 0
         Chase_State.CurrentTierName = nil
         Chase_State.IsTransitioning = false
@@ -1954,11 +1981,12 @@ task.spawn(function()
         if Chase_State.LoopConnA then Chase_State.LoopConnA:Disconnect(); Chase_State.LoopConnA = nil end
         if Chase_State.LoopConnB then Chase_State.LoopConnB:Disconnect(); Chase_State.LoopConnB = nil end
 
-        local fadeTime = instant and 0 or (tonumber(GetValue("Chase_FadeTime")) or 0.6)
+        local canFade = not instant and ShouldFadeOut(curTier)
+        local fadeTime = canFade and (tonumber(GetValue("Chase_FadeTime")) or 0.6) or 0
 
         local function KillVoice(v)
             if not v or not v.Parent then return end
-            if instant or fadeTime <= 0.05 then
+            if not canFade or fadeTime <= 0.05 then
                 v:Stop()
                 v:Destroy()
             else
@@ -2027,18 +2055,25 @@ task.spawn(function()
             Chase_State.VoiceA = newVoice
         end
 
+        local prevTier = Chase_State.CurrentTierName
         Chase_State.ActiveVoice = targetVoiceSlot
         Chase_State.ActiveAsset = assetId
 
         if currentVoice and currentVoice.IsPlaying and not currentVoice:GetAttribute("FadingOut") then
             currentVoice:SetAttribute("FadingOut", true)
-            local fadeOut = TweenService:Create(currentVoice, TweenInfo.new(fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = 0 })
-            fadeOut:Play()
-            fadeOut.Completed:Once(function()
+            local doFadeOut = ShouldFadeOut(prevTier)
+            if doFadeOut and fadeTime > 0.05 then
+                local fadeOut = TweenService:Create(currentVoice, TweenInfo.new(fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = 0 })
+                fadeOut:Play()
+                fadeOut.Completed:Once(function()
+                    currentVoice:Stop()
+                    currentVoice:Destroy()
+                end)
+                Debris:AddItem(currentVoice, fadeTime + 0.25)
+            else
                 currentVoice:Stop()
                 currentVoice:Destroy()
-            end)
-            Debris:AddItem(currentVoice, fadeTime + 0.25)
+            end
         end
 
         local function SetupLoop()
@@ -2081,9 +2116,16 @@ task.spawn(function()
                 newVoice.Looped = true
             end
 
-            newVoice:Play()
-            local fadeIn = TweenService:Create(newVoice, TweenInfo.new(fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = targetVol })
-            fadeIn:Play()
+            local doFadeIn = ShouldFadeIn(tierName)
+            if doFadeIn and fadeTime > 0.05 then
+                newVoice.Volume = 0
+                newVoice:Play()
+                local fadeIn = TweenService:Create(newVoice, TweenInfo.new(fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = targetVol })
+                fadeIn:Play()
+            else
+                newVoice.Volume = targetVol
+                newVoice:Play()
+            end
         end
 
         if not newVoice.IsLoaded then
@@ -2097,6 +2139,7 @@ task.spawn(function()
         if IsInLobby() then return 0 end
         if not CanRunChase() then return 0 end
         if IsInCutscene() then return 0 end
+        if LMS_State and (LMS_State.LMSActive or LMS_State.IsTriggered) then return 0 end
 
         local hasLay1 = GetValue("Chase_HasLay1") == true
         local hasLay2 = GetValue("Chase_HasLay2") == true
@@ -2125,6 +2168,8 @@ task.spawn(function()
         local survDistances = {}
         local minD = 9999
 
+        local flatVector = Vector3.new(1, 0, 1)
+
         if IsLocalKiller() then
             local myChar = LocalPlayer.Character
             if not myChar or myChar:GetAttribute("Dead") == true then return 0 end
@@ -2136,7 +2181,7 @@ task.spawn(function()
                 local sHum = sChar:FindFirstChildOfClass("Humanoid")
                 local sRoot = sChar:FindFirstChild("HumanoidRootPart") or sChar.PrimaryPart
                 if sRoot and (not sHum or sHum.Health > 0) and sChar:GetAttribute("Dead") ~= true then
-                    local d = (sRoot.Position - myRoot.Position).Magnitude
+                    local d = ((sRoot.Position - myRoot.Position) * flatVector).Magnitude
                     table.insert(survDistances, d)
                     if d < minD then minD = d end
                 end
@@ -2166,31 +2211,49 @@ task.spawn(function()
             else
                 local cam = workspace.CurrentCamera
                 local subj = cam and cam.CameraSubject
-                local spectatedChar = subj and (subj:IsA("Humanoid") and subj.Parent or subj:IsA("Model") and subj)
+                local spectatedChar = subj and (subj:IsA("Humanoid") and subj.Parent or subj:IsA("BasePart") and subj.Parent or subj:IsA("Model") and subj)
 
-                if spectatedChar and spectatedChar:IsA("Model") then
-                    if spectatedChar:IsDescendantOf(killFolder) then
-                        local kRoot = spectatedChar:FindFirstChild("HumanoidRootPart") or spectatedChar.PrimaryPart
-                        if kRoot then
-                            for _, sChar in ipairs(survFolder:GetChildren()) do
-                                local sHum = sChar:FindFirstChildOfClass("Humanoid")
-                                local sRoot = sChar:FindFirstChild("HumanoidRootPart") or sChar.PrimaryPart
-                                if sRoot and (not sHum or sHum.Health > 0) and sChar:GetAttribute("Dead") ~= true then
-                                    local d = (sRoot.Position - kRoot.Position).Magnitude
-                                    table.insert(survDistances, d)
-                                    if d < minD then minD = d end
-                                end
+                if not spectatedChar or spectatedChar == myChar then
+                    return 0
+                end
+
+                local targetHum = spectatedChar:FindFirstChildOfClass("Humanoid")
+                local isTargetAlive = (spectatedChar:GetAttribute("Dead") ~= true) and (not targetHum or targetHum.Health > 0)
+                if not isTargetAlive then
+                    return 0
+                end
+
+                if spectatedChar:IsDescendantOf(killFolder) then
+                    if spectatedChar:GetAttribute("InCutscene") == true
+                        or spectatedChar:GetAttribute("Executing") == true
+                        or spectatedChar:GetAttribute("InExecution") == true
+                        or spectatedChar:GetAttribute("IntroActive") == true then
+                        return 0
+                    end
+
+                    local kHum = spectatedChar:FindFirstChildOfClass("Humanoid")
+                    local kAnim = kHum and kHum:FindFirstChildOfClass("Animator")
+                    if kAnim then
+                        for _, track in ipairs(kAnim:GetPlayingAnimationTracks()) do
+                            local tName = (track.Name or ""):lower()
+                            if tName:find("execution") or tName:find("intro") or tName:find("victory") then
+                                return 0
                             end
                         end
-                    else
-                        targetRoot = spectatedChar:FindFirstChild("HumanoidRootPart") or spectatedChar.PrimaryPart
                     end
+
+                    Chase_State.ClosestDistance = 0
+                    return 4
+                elseif spectatedChar:IsDescendantOf(survFolder) then
+                    targetRoot = spectatedChar:FindFirstChild("HumanoidRootPart") or spectatedChar.PrimaryPart
+                else
+                    return 0
                 end
             end
 
             if targetRoot then
                 for _, kRoot in ipairs(activeKillers) do
-                    local d = (kRoot.Position - targetRoot.Position).Magnitude
+                    local d = ((kRoot.Position - targetRoot.Position) * flatVector).Magnitude
                     if d < minD then minD = d end
                 end
                 table.insert(survDistances, minD)
@@ -2207,37 +2270,35 @@ task.spawn(function()
             return c
         end
 
-        -- HoldPlayerTrigger
+        local trackDataNow = TrackRegistry.Chase[IsLocalKiller() and GetValue("Chase_Track") or (GetValue("Chase_SurvTrack") ~= "None" and GetValue("Chase_SurvTrack") or GetValue("Chase_Track"))]
+        local hasTimingsNow = trackDataNow and trackDataNow.Timings and (trackDataNow.Timings.Lay1 or trackDataNow.Timings.Lay2 or trackDataNow.Timings.Lay3 or trackDataNow.Timings.Chase)
+
+        -- Responsive Trigger with Smooth Hysteresis
         if cur == 4 then
-            if hasChase and CountInZone(rChaseAbsorbed) > 0 then
-                return 4
-            else
-                return 0
-            end
+            local exitLimit = hasTimingsNow and (rChaseBase + buffer) or rChaseAbsorbed
+            if hasChase and CountInZone(exitLimit) > 0 then return 4 end
+            if hasLay3 and CountInZone(rLay3Base + buffer) > 0 then return 3 end
+            if hasLay2 and CountInZone(rLay2Base + buffer) > 0 then return 2 end
+            if hasLay1 and CountInZone(rLay1Base + buffer) > 0 then return 1 end
+            return 0
         elseif cur == 3 then
             if hasChase and CountInZone(rChaseBase) > 0 then return 4 end
-            if hasLay3 and CountInZone(rLay3Absorbed) > 0 then
-                return 3
-            else
-                return 0
-            end
+            if hasLay3 and CountInZone(rLay3Base + buffer) > 0 then return 3 end
+            if hasLay2 and CountInZone(rLay2Base + buffer) > 0 then return 2 end
+            if hasLay1 and CountInZone(rLay1Base + buffer) > 0 then return 1 end
+            return 0
         elseif cur == 2 then
             if hasChase and CountInZone(rChaseBase) > 0 then return 4 end
             if hasLay3 and CountInZone(rLay3Base) > 0 then return 3 end
-            if hasLay2 and CountInZone(rLay2Absorbed) > 0 then
-                return 2
-            else
-                return 0
-            end
+            if hasLay2 and CountInZone(rLay2Base + buffer) > 0 then return 2 end
+            if hasLay1 and CountInZone(rLay1Base + buffer) > 0 then return 1 end
+            return 0
         elseif cur == 1 then
             if hasChase and CountInZone(rChaseBase) > 0 then return 4 end
             if hasLay3 and CountInZone(rLay3Base) > 0 then return 3 end
             if hasLay2 and CountInZone(rLay2Base) > 0 then return 2 end
-            if hasLay1 and CountInZone(rLay1Base + buffer) > 0 then
-                return 1
-            else
-                return 0
-            end
+            if hasLay1 and CountInZone(rLay1Base + buffer) > 0 then return 1 end
+            return 0
         else
             if hasChase and CountInZone(rChaseBase) > 0 then return 4
             elseif hasLay3 and CountInZone(rLay3Base) > 0 then return 3
@@ -2277,7 +2338,16 @@ task.spawn(function()
             return
         end
 
-        local trackName = GetValue("Chase_Track") or "None"
+        local trackName = "None"
+        if IsLocalKiller() then
+            trackName = GetValue("Chase_Track") or "None"
+        else
+            trackName = GetValue("Chase_SurvTrack") or "None"
+            if trackName == "None" then
+                trackName = GetValue("Chase_Track") or "None"
+            end
+        end
+
         if trackName == "Off" or trackName == "None" then
             if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
                 StopChaseAudio(false)
@@ -2294,7 +2364,7 @@ task.spawn(function()
         if targetLayer <= 0 then
             if not Chase_State.ZeroSince then
                 Chase_State.ZeroSince = os.clock()
-            elseif os.clock() - Chase_State.ZeroSince >= 1.0 then
+            elseif os.clock() - Chase_State.ZeroSince >= 0.25 then
                 if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
                     StopChaseAudio(false)
                 end
@@ -2379,7 +2449,12 @@ task.spawn(function()
             return
         end
 
-        if (Chase_State.IsTransitioning or Chase_State.IsLoading) and not isTrackHotswap then return end
+        -- Immediate priority override for close chase
+        if targetLayer == 4 and Chase_State.CurrentTierName ~= "Chase" then
+            Chase_State.IsTransitioning = false
+        elseif (Chase_State.IsTransitioning or Chase_State.IsLoading) and not isTrackHotswap then
+            return
+        end
 
         if Chase_State.CurrentTierName ~= targetTierName or isTrackHotswap then
             local prevTier = Chase_State.CurrentTierName
@@ -2412,15 +2487,8 @@ task.spawn(function()
 
                 local rawLayer = tonumber(layer) or 0
                 if rawLayer > 0 then
-                    if not Chase_State.ThemesSilenced then
-                        SilenceThemesForCustomChase()
-                        Chase_State.ThemesSilenced = true
-                    end
-                else
-                    if Chase_State.CurrentLayer <= 0 and not (LMS_State and LMS_State.LMSActive) then
-                        Chase_State.ThemesSilenced = false
-                        RestoreNativeChase()
-                    end
+                    SilenceThemesForCustomChase(0)
+                    Chase_State.ThemesSilenced = true
                 end
             end)
         end
@@ -2457,7 +2525,7 @@ task.spawn(function()
                     end
                 end
             end
-            FadeChaseMuteBus(0, 0.2)
+            FadeChaseMuteBus(0, 0)
         else
             if Chase_State and not Chase_State.ThemesSilenced and next(SuppressedChase) ~= nil then
                 RestoreNativeChase(0.4)
@@ -2469,289 +2537,9 @@ task.spawn(function()
         RefreshAudioDropdowns(notify)
     end
 
-    -- [ Night Mode Engine ]
-    local NightColorPalettes = {
-        Ambient = {
-            ["Navy Night"]   = Color3.fromRGB(50, 50, 80),
-            ["Pitch Black"]  = Color3.fromRGB(0, 0, 0),
-            ["Blood Red"]    = Color3.fromRGB(80, 20, 20),
-            ["Dark Purple"]  = Color3.fromRGB(60, 25, 80),
-            ["Cold Blue"]    = Color3.fromRGB(20, 45, 85),
-            ["Ashen Grey"]   = Color3.fromRGB(65, 65, 65),
-        },
-        Outdoor = {
-            ["Pitch Black"]   = Color3.fromRGB(0, 0, 0),
-            ["Midnight Blue"] = Color3.fromRGB(15, 20, 40),
-            ["Blood Tint"]    = Color3.fromRGB(45, 10, 10),
-            ["Dark Sepia"]    = Color3.fromRGB(35, 25, 15),
-            ["Muted Grey"]    = Color3.fromRGB(40, 40, 40),
-        },
-        Fog = {
-            ["Navy Blue"]       = Color3.fromRGB(50, 50, 80),
-            ["Abyssal Black"]   = Color3.fromRGB(5, 5, 10),
-            ["Blood Crimson"]   = Color3.fromRGB(90, 15, 15),
-            ["Spectral Purple"] = Color3.fromRGB(70, 20, 95),
-            ["Toxic Green"]     = Color3.fromRGB(20, 70, 35),
-            ["Misty Grey"]      = Color3.fromRGB(75, 75, 85),
-        },
-        Lights = {
-            ["Pure White"]  = Color3.fromRGB(255, 255, 255),
-            ["Warm Torch"]  = Color3.fromRGB(255, 185, 110),
-            ["Cold Cyan"]   = Color3.fromRGB(130, 225, 255),
-            ["Blood Red"]   = Color3.fromRGB(255, 60, 60),
-            ["Pale Violet"] = Color3.fromRGB(205, 140, 255),
-            ["Lime Glow"]   = Color3.fromRGB(150, 255, 130),
-        },
-        Time = {
-            ["Midnight (00:00)"]   = "00:00:00",
-            ["Deep Night (22:00)"] = "22:00:00",
-            ["Blood Moon (03:00)"] = "03:00:00",
-            ["Eclipse (19:00)"]    = "19:00:00",
-            ["Pitch Dark (01:00)"] = "01:00:00",
-        }
-    }
-
-    local NightOriginal = {
-        Saved = false,
-        TimeOfDay = nil,
-        Ambient = nil,
-        OutdoorAmbient = nil,
-        Brightness = nil,
-        FogColor = nil,
-        FogStart = nil,
-        FogEnd = nil,
-        AtmosphereCreated = false,
-        Atmosphere = nil,
-    }
-    local NightLightCache = {}
-    local IsNightApplyingInternal = false
-
-    local function SaveOriginalLighting()
-        if NightOriginal.Saved then return end
-        NightOriginal.Saved = true
-        NightOriginal.TimeOfDay = Lighting.TimeOfDay
-        NightOriginal.Ambient = Lighting.Ambient
-        NightOriginal.OutdoorAmbient = Lighting.OutdoorAmbient
-        NightOriginal.Brightness = Lighting.Brightness
-        NightOriginal.FogColor = Lighting.FogColor
-        NightOriginal.FogStart = Lighting.FogStart
-        NightOriginal.FogEnd = Lighting.FogEnd
-
-        local atmos = Lighting:FindFirstChildOfClass("Atmosphere")
-        if atmos and atmos.Name ~= "Doomsense_NightAtmosphere" then
-            NightOriginal.Atmosphere = {
-                Density = atmos.Density,
-                Color = atmos.Color,
-                Decay = atmos.Decay,
-                Offset = atmos.Offset,
-                Glare = atmos.Glare,
-                Haze = atmos.Haze,
-            }
-            NightOriginal.AtmosphereCreated = false
-        else
-            NightOriginal.Atmosphere = nil
-            NightOriginal.AtmosphereCreated = false
-        end
-    end
-
-    local function RestoreNightWorldLights()
-        for light, orig in pairs(NightLightCache) do
-            if light and light.Parent then
-                pcall(function()
-                    light.Color = orig.Color
-                    light.Brightness = orig.Brightness
-                    light.Range = orig.Range
-                end)
-            end
-        end
-        table.clear(NightLightCache)
-    end
-
-    local function UpdateNightWorldLights()
-        if not GetValue("Night_Enabled") then
-            RestoreNightWorldLights()
-            return
-        end
-        local inLobby = IsInLobby()
-        if inLobby and not GetValue("Night_Lobby") then
-            RestoreNightWorldLights()
-            return
-        end
-
-        local modLights = GetValue("Night_ModifyLights")
-        if not modLights then
-            RestoreNightWorldLights()
-            return
-        end
-
-        local brightVal = tonumber(GetValue("Night_LightBright")) or 2.0
-        local rangeVal = tonumber(GetValue("Night_LightRange")) or 25
-        local colorKey = GetValue("Night_LightColorPreset") or "Pure White"
-        local targetColor = NightColorPalettes.Lights[colorKey] or Color3.fromRGB(255, 255, 255)
-
-        for _, light in ipairs(workspace:GetDescendants()) do
-            if light:IsA("PointLight") or light:IsA("SpotLight") or light:IsA("SurfaceLight") then
-                if not NightLightCache[light] then
-                    NightLightCache[light] = {
-                        Color = light.Color,
-                        Brightness = light.Brightness,
-                        Range = light.Range
-                    }
-                end
-                light.Color = targetColor
-                light.Brightness = brightVal
-                light.Range = rangeVal
-            end
-        end
-    end
-
-    local function RestoreNightLighting()
-        if not NightOriginal.Saved then return end
-        IsNightApplyingInternal = true
-        pcall(function()
-            if NightOriginal.TimeOfDay then Lighting.TimeOfDay = NightOriginal.TimeOfDay end
-            if NightOriginal.Ambient then Lighting.Ambient = NightOriginal.Ambient end
-            if NightOriginal.OutdoorAmbient then Lighting.OutdoorAmbient = NightOriginal.OutdoorAmbient end
-            if NightOriginal.Brightness then Lighting.Brightness = NightOriginal.Brightness end
-            if NightOriginal.FogColor then Lighting.FogColor = NightOriginal.FogColor end
-            if NightOriginal.FogStart then Lighting.FogStart = NightOriginal.FogStart end
-            if NightOriginal.FogEnd then Lighting.FogEnd = NightOriginal.FogEnd end
-
-            local customAtmos = Lighting:FindFirstChild("Doomsense_NightAtmosphere")
-            if customAtmos then
-                customAtmos:Destroy()
-            end
-
-            local atmos = Lighting:FindFirstChildOfClass("Atmosphere")
-            if atmos and NightOriginal.Atmosphere then
-                atmos.Density = NightOriginal.Atmosphere.Density
-                atmos.Color = NightOriginal.Atmosphere.Color
-                atmos.Decay = NightOriginal.Atmosphere.Decay
-                atmos.Offset = NightOriginal.Atmosphere.Offset
-                atmos.Glare = NightOriginal.Atmosphere.Glare
-                atmos.Haze = NightOriginal.Atmosphere.Haze
-            end
-        end)
-        RestoreNightWorldLights()
-        NightOriginal.Saved = false
-        IsNightApplyingInternal = false
-    end
-
-    local function ApplyNightLighting()
-        local enabled = GetValue("Night_Enabled")
-        local inLobby = IsInLobby()
-        local allowInLobby = GetValue("Night_Lobby")
-
-        if not enabled or (inLobby and not allowInLobby) then
-            RestoreNightLighting()
-            return
-        end
-
-        SaveOriginalLighting()
-        IsNightApplyingInternal = true
-
-        local timeChoice = GetValue("Night_TimePreset") or "Midnight (00:00)"
-        local timeString = NightColorPalettes.Time[timeChoice] or "00:00:00"
-
-        local brightness = tonumber(GetValue("Night_Brightness")) or 1.5
-
-        local ambChoice = GetValue("Night_AmbientPreset") or "Navy Night"
-        local ambientColor = NightColorPalettes.Ambient[ambChoice] or Color3.fromRGB(50, 50, 80)
-
-        local outChoice = GetValue("Night_OutdoorPreset") or "Pitch Black"
-        local outdoorColor = NightColorPalettes.Outdoor[outChoice] or Color3.fromRGB(0, 0, 0)
-
-        local fogEnabled = GetValue("Night_FogEnabled")
-        local fogChoice = GetValue("Night_FogPreset") or "Navy Blue"
-        local fogColor = NightColorPalettes.Fog[fogChoice] or Color3.fromRGB(50, 50, 80)
-        local fogDensity = tonumber(GetValue("Night_FogDensity")) or 2.5
-        local fogDistance = tonumber(GetValue("Night_FogDistance")) or 350
-        local hazeVal = tonumber(GetValue("Night_AtmosphereHaze")) or 1.0
-
-        pcall(function()
-            Lighting.TimeOfDay = timeString
-            Lighting.Ambient = ambientColor
-            Lighting.OutdoorAmbient = outdoorColor
-            Lighting.Brightness = brightness
-
-            local atmos = Lighting:FindFirstChildOfClass("Atmosphere")
-            if fogEnabled then
-                Lighting.FogColor = fogColor
-                Lighting.FogStart = 0
-                Lighting.FogEnd   = fogDistance
-
-                if not atmos then
-                    atmos = Instance.new("Atmosphere")
-                    atmos.Name = "Doomsense_NightAtmosphere"
-                    atmos.Parent = Lighting
-                    NightOriginal.AtmosphereCreated = true
-                end
-                atmos.Density = math.clamp(fogDensity / 5, 0, 1)
-                atmos.Color   = fogColor
-                atmos.Decay   = fogColor
-                atmos.Offset  = 0.25
-                atmos.Glare   = 0
-                atmos.Haze    = hazeVal
-            else
-                Lighting.FogStart = 0
-                Lighting.FogEnd   = 9e9
-                if atmos then
-                    if NightOriginal.AtmosphereCreated then
-                        atmos:Destroy()
-                        NightOriginal.AtmosphereCreated = false
-                    elseif NightOriginal.Atmosphere then
-                        atmos.Density = NightOriginal.Atmosphere.Density
-                        atmos.Color   = NightOriginal.Atmosphere.Color
-                        atmos.Haze    = NightOriginal.Atmosphere.Haze
-                    else
-                        atmos.Density = 0
-                    end
-                end
-            end
-        end)
-
-        UpdateNightWorldLights()
-        IsNightApplyingInternal = false
-    end
-
-    local WasNightLobbyState = true
-    RunService.Heartbeat:Connect(function()
-        local inLobby = IsInLobby()
-        if inLobby ~= WasNightLobbyState then
-            WasNightLobbyState = inLobby
-            if inLobby then
-                if not GetValue("Night_Lobby") then
-                    RestoreNightLighting()
-                else
-                    if GetValue("Night_Enabled") then
-                        task.delay(0.2, ApplyNightLighting)
-                    end
-                end
-            else
-                if GetValue("Night_Enabled") then
-                    task.delay(0.6, ApplyNightLighting)
-                end
-            end
-        end
+    pcall(function()
+        RunService:UnbindFromRenderStep("FPlus_NightStudioEnforcer")
     end)
-
-    Lighting:GetPropertyChangedSignal("TimeOfDay"):Connect(function()
-        if not IsNightApplyingInternal and GetValue("Night_Enabled") then
-            local inLobby = IsInLobby()
-            if not inLobby or GetValue("Night_Lobby") then
-                ApplyNightLighting()
-            end
-        end
-    end)
-
-    if InGame then
-        InGame.ChildAdded:Connect(function(Child)
-            if Child.Name == "Map" and GetValue("Night_Enabled") then
-                NightOriginal.Saved = false
-                task.delay(1.2, ApplyNightLighting)
-            end
-        end)
-    end
 
     -- [ Generator ]
     local GenWorldBars = {}
@@ -3055,230 +2843,6 @@ task.spawn(function()
 
     -- [ UI Package Definition ]
     local AddonsPackage = {
-        ["Visual_NightMode"] = {
-            ["TabAttributes"] = {
-                ["DisplayTitle"] = "Night Mode / Atmosphere",
-                ["LayoutOrder"] = 106
-            },
-            ["Night_Enabled"] = {
-                ["DisplayDescription"] = "",
-                ["DisplayTitle"] = "Enable Night Mode",
-                ["LayoutOrder"] = 1,
-                ["Savable"] = false,
-                ["InstanceType"] = "BoolValue",
-                ["DefaultInstanceValue"] = false,
-                ["ScriptFunction"] = function(self, val)
-                    ApplyNightLighting()
-                end
-            },
-            ["Night_Lobby"] = {
-                ["DisplayDescription"] = "Allows Night Mode to remain active while in the lobby",
-                ["DisplayTitle"] = "Apply In Lobby",
-                ["LayoutOrder"] = 2,
-                ["Savable"] = true,
-                ["InstanceType"] = "BoolValue",
-                ["DefaultInstanceValue"] = false,
-                ["Requirement"] = "Night_Enabled",
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") then
-                        ApplyNightLighting()
-                    end
-                end
-            },
-            ["Night_TimePreset"] = {
-                ["DisplayDescription"] = "Select the world clock time / night sky type",
-                ["DisplayTitle"] = "Time of Day",
-                ["LayoutOrder"] = 3,
-                ["Savable"] = true,
-                ["InstanceType"] = "StringValue",
-                ["DefaultInstanceValue"] = "Midnight (00:00)",
-                ["ExtraData"] = {
-                    ["Options"] = "Midnight (00:00)|Deep Night (22:00)|Blood Moon (03:00)|Eclipse (19:00)|Pitch Dark (01:00)"
-                },
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") then
-                        ApplyNightLighting()
-                    end
-                end
-            },
-            ["Night_Brightness"] = {
-                ["DisplayDescription"] = "Adjusts global light brightness level (0 = pitch black, 8 = bright)",
-                ["DisplayTitle"] = "World Brightness",
-                ["LayoutOrder"] = 4,
-                ["Savable"] = true,
-                ["InstanceType"] = "NumberValue",
-                ["DefaultInstanceValue"] = 1.5,
-                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 8.0, ["Step"] = 0.1 },
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") then
-                        ApplyNightLighting()
-                    end
-                end
-            },
-            ["Night_AmbientPreset"] = {
-                ["DisplayDescription"] = "Color palette for dark areas and shadows",
-                ["DisplayTitle"] = "Shadow Tone (Ambient)",
-                ["LayoutOrder"] = 5,
-                ["Savable"] = true,
-                ["InstanceType"] = "StringValue",
-                ["DefaultInstanceValue"] = "Navy Night",
-                ["ExtraData"] = {
-                    ["Options"] = "Navy Night|Pitch Black|Blood Red|Dark Purple|Cold Blue|Ashen Grey"
-                },
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") then
-                        ApplyNightLighting()
-                    end
-                end
-            },
-            ["Night_OutdoorPreset"] = {
-                ["DisplayDescription"] = "Color palette for outdoor ambient highlights",
-                ["DisplayTitle"] = "Outdoor Sky Tone",
-                ["LayoutOrder"] = 6,
-                ["Savable"] = true,
-                ["InstanceType"] = "StringValue",
-                ["DefaultInstanceValue"] = "Pitch Black",
-                ["ExtraData"] = {
-                    ["Options"] = "Pitch Black|Midnight Blue|Blood Tint|Dark Sepia|Muted Grey"
-                },
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") then
-                        ApplyNightLighting()
-                    end
-                end
-            },
-            ["Night_FogEnabled"] = {
-                ["DisplayDescription"] = "Toggles dense atmospheric fog on or off",
-                ["DisplayTitle"] = "Enable Custom Fog",
-                ["LayoutOrder"] = 7,
-                ["Savable"] = true,
-                ["InstanceType"] = "BoolValue",
-                ["DefaultInstanceValue"] = false,
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") then
-                        ApplyNightLighting()
-                    end
-                end
-            },
-            ["Night_FogPreset"] = {
-                ["DisplayDescription"] = "Color tint for the atmospheric fog",
-                ["DisplayTitle"] = "Fog Color",
-                ["LayoutOrder"] = 8,
-                ["Savable"] = true,
-                ["InstanceType"] = "StringValue",
-                ["DefaultInstanceValue"] = "Navy Blue",
-                ["ExtraData"] = {
-                    ["Options"] = "Navy Blue|Abyssal Black|Blood Crimson|Spectral Purple|Toxic Green|Misty Grey"
-                },
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") and GetValue("Night_FogEnabled") then
-                        ApplyNightLighting()
-                    end
-                end
-            },
-            ["Night_FogDensity"] = {
-                ["DisplayDescription"] = "Fog thickness (0 = clear, 5 = extremely thick)",
-                ["DisplayTitle"] = "Fog Thickness / Density",
-                ["LayoutOrder"] = 9,
-                ["Savable"] = true,
-                ["InstanceType"] = "NumberValue",
-                ["DefaultInstanceValue"] = 2.5,
-                ["ExtraData"] = { ["MinValue"] = 0.1, ["MaxValue"] = 5.0, ["Step"] = 0.1 },
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") and GetValue("Night_FogEnabled") then
-                        ApplyNightLighting()
-                    end
-                end
-            },
-            ["Night_FogDistance"] = {
-                ["DisplayDescription"] = "View distance before fog fully covers sight",
-                ["DisplayTitle"] = "Fog View Distance",
-                ["LayoutOrder"] = 10,
-                ["Savable"] = true,
-                ["InstanceType"] = "NumberValue",
-                ["DefaultInstanceValue"] = 350,
-                ["ExtraData"] = { ["MinValue"] = 50, ["MaxValue"] = 1000, ["Step"] = 25 },
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") and GetValue("Night_FogEnabled") then
-                        ApplyNightLighting()
-                    end
-                end
-            },
-            ["Night_AtmosphereHaze"] = {
-                ["DisplayDescription"] = "Atmospheric horizon haze intensity",
-                ["DisplayTitle"] = "Atmosphere Haze",
-                ["LayoutOrder"] = 11,
-                ["Savable"] = true,
-                ["InstanceType"] = "NumberValue",
-                ["DefaultInstanceValue"] = 1.0,
-                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 10.0, ["Step"] = 0.5 },
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") and GetValue("Night_FogEnabled") then
-                        ApplyNightLighting()
-                    end
-                end
-            },
-            ["Night_ModifyLights"] = {
-                ["DisplayDescription"] = "Modifies all PointLights, SpotLights and SurfaceLights on the map",
-                ["DisplayTitle"] = "Modify Map Lights",
-                ["LayoutOrder"] = 12,
-                ["Savable"] = true,
-                ["InstanceType"] = "BoolValue",
-                ["DefaultInstanceValue"] = true,
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") then
-                        UpdateNightWorldLights()
-                    else
-                        RestoreNightWorldLights()
-                    end
-                end
-            },
-            ["Night_LightBright"] = {
-                ["DisplayDescription"] = "Brightness level applied to map light sources",
-                ["DisplayTitle"] = "Map Lights Brightness",
-                ["LayoutOrder"] = 13,
-                ["Savable"] = true,
-                ["InstanceType"] = "NumberValue",
-                ["DefaultInstanceValue"] = 2.0,
-                ["ExtraData"] = { ["MinValue"] = 0.5, ["MaxValue"] = 10.0, ["Step"] = 0.5 },
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") and GetValue("Night_ModifyLights") then
-                        UpdateNightWorldLights()
-                    end
-                end
-            },
-            ["Night_LightRange"] = {
-                ["DisplayDescription"] = "Radius in studs for map light sources",
-                ["DisplayTitle"] = "Map Lights Radius",
-                ["LayoutOrder"] = 14,
-                ["Savable"] = true,
-                ["InstanceType"] = "NumberValue",
-                ["DefaultInstanceValue"] = 25,
-                ["ExtraData"] = { ["MinValue"] = 5, ["MaxValue"] = 60, ["Step"] = 5 },
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") and GetValue("Night_ModifyLights") then
-                        UpdateNightWorldLights()
-                    end
-                end
-            },
-            ["Night_LightColorPreset"] = {
-                ["DisplayDescription"] = "Color tone applied to map light sources",
-                ["DisplayTitle"] = "Map Lights Color",
-                ["LayoutOrder"] = 15,
-                ["Savable"] = true,
-                ["InstanceType"] = "StringValue",
-                ["DefaultInstanceValue"] = "Pure White",
-                ["ExtraData"] = {
-                    ["Options"] = "Pure White|Warm Torch|Cold Cyan|Blood Red|Pale Violet|Lime Glow"
-                },
-                ["ScriptFunction"] = function(self, val)
-                    if GetValue("Night_Enabled") and GetValue("Night_ModifyLights") then
-                        UpdateNightWorldLights()
-                    end
-                end
-            }
-        },
-
         ["Visual_Generators"] = {
             ["TabAttributes"] = {
                 ["DisplayTitle"] = "Generator Indicators",
@@ -3588,24 +3152,9 @@ task.spawn(function()
                     end
                 end
             },
-            ["Chase_Rescan"] = {
-                ["DisplayDescription"] = "Fast rescan of Chase audio files and timing configs",
-                ["DisplayTitle"] = "Rescan Chase Audio",
-                ["LayoutOrder"] = 2,
-                ["Savable"] = false,
-                ["InstanceType"] = "BoolValue",
-                ["DefaultInstanceValue"] = false,
-                ["ScriptFunction"] = function(self, val)
-                    if val then
-                        self.Instance.Value = false
-                        RefreshChaseDropdowns(true)
-                        if typeof(PlaySound) == "function" then PlaySound("select") end
-                    end
-                end
-            },
-            ["Chase_Track"] = {
-                ["DisplayDescription"] = "Select Chase track (automatically loads & saves track-specific settings)",
-                ["DisplayTitle"] = "Chase: Audio File",
+            ["Chase_SurvTrack"] = {
+                ["DisplayDescription"] = "Select Chase track when playing as Survivor or Spectating (Uses tracks from Killer Chase folder)",
+                ["DisplayTitle"] = "Survivor: Chase Audio File",
                 ["LayoutOrder"] = 3,
                 ["Savable"] = true,
                 ["InstanceType"] = "StringValue",
@@ -3618,58 +3167,40 @@ task.spawn(function()
                     SyncChaseAudio()
                 end
             },
-            ["Chase_HasChase"] = {
-                ["DisplayDescription"] = "Enable or disable Chase segment (Layer 4)",
-                ["DisplayTitle"] = "Enable: Chase Segment",
+            ["Chase_Track"] = {
+                ["DisplayDescription"] = "Select Killer Chase track (automatically loads & saves track-specific settings)",
+                ["DisplayTitle"] = "Killer: Chase Audio File",
                 ["LayoutOrder"] = 4,
                 ["Savable"] = true,
-                ["InstanceType"] = "BoolValue",
-                ["DefaultInstanceValue"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "None",
+                ["ExtraData"] = { ["Options"] = initChase },
                 ["ScriptFunction"] = function(self, val)
-                    OnChaseSettingModified()
+                    if val and val ~= "None" and val ~= "Off" then
+                        LoadTrackConfig(val)
+                    end
                     SyncChaseAudio()
                 end
             },
-            ["Chase_HasLay3"] = {
-                ["DisplayDescription"] = "Enable or disable Layer 3 segment (Close Terror)",
-                ["DisplayTitle"] = "Enable: Layer 3 Segment",
+            ["Chase_Rescan"] = {
+                ["DisplayDescription"] = "Fast rescan of Chase audio files and timing configs",
+                ["DisplayTitle"] = "Rescan Chase Audio",
                 ["LayoutOrder"] = 5,
-                ["Savable"] = true,
+                ["Savable"] = false,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false,
                 ["ScriptFunction"] = function(self, val)
-                    OnChaseSettingModified()
-                    SyncChaseAudio()
-                end
-            },
-            ["Chase_HasLay2"] = {
-                ["DisplayDescription"] = "Enable or disable Layer 2 segment (Medium Terror)",
-                ["DisplayTitle"] = "Enable: Layer 2 Segment",
-                ["LayoutOrder"] = 6,
-                ["Savable"] = true,
-                ["InstanceType"] = "BoolValue",
-                ["DefaultInstanceValue"] = false,
-                ["ScriptFunction"] = function(self, val)
-                    OnChaseSettingModified()
-                    SyncChaseAudio()
-                end
-            },
-            ["Chase_HasLay1"] = {
-                ["DisplayDescription"] = "Enable or disable Layer 1 segment (Far Terror)",
-                ["DisplayTitle"] = "Enable: Layer 1 Segment",
-                ["LayoutOrder"] = 7,
-                ["Savable"] = true,
-                ["InstanceType"] = "BoolValue",
-                ["DefaultInstanceValue"] = false,
-                ["ScriptFunction"] = function(self, val)
-                    OnChaseSettingModified()
-                    SyncChaseAudio()
+                    if val then
+                        self.Instance.Value = false
+                        RefreshChaseDropdowns(true)
+                        if typeof(PlaySound) == "function" then PlaySound("select") end
+                    end
                 end
             },
             ["Chase_Volume"] = {
                 ["DisplayDescription"] = "Base volume multiplier for Chase audio",
                 ["DisplayTitle"] = "Chase Volume",
-                ["LayoutOrder"] = 4,
+                ["LayoutOrder"] = 6,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 1.0,
@@ -3678,10 +3209,22 @@ task.spawn(function()
                     OnChaseSettingModified()
                 end
             },
+            ["Chase_PlaybackSpeed"] = {
+                ["DisplayDescription"] = "Playback speed and pitch multiplier for Chase audio",
+                ["DisplayTitle"] = "Playback Speed (Pitch)",
+                ["LayoutOrder"] = 7,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 1.0,
+                ["ExtraData"] = { ["MinValue"] = 0.5, ["MaxValue"] = 2.0, ["Step"] = 0.05 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
             ["Chase_RangeMultiplier"] = {
                 ["DisplayDescription"] = "Scales all chase/terror distance stages in multiples (e.g. 2.0x doubles all radii)",
                 ["DisplayTitle"] = "Stage Range Multiplier",
-                ["LayoutOrder"] = 5,
+                ["LayoutOrder"] = 8,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 1.0,
@@ -3690,34 +3233,10 @@ task.spawn(function()
                     OnChaseSettingModified()
                 end
             },
-            ["Chase_BonusExpansion"] = {
-                ["DisplayDescription"] = "Extra distance added when Chase absorbs all layers (Total Size + Bonus studs)",
-                ["DisplayTitle"] = "Chase Absorbed Bonus (Studs)",
-                ["LayoutOrder"] = 6,
-                ["Savable"] = true,
-                ["InstanceType"] = "NumberValue",
-                ["DefaultInstanceValue"] = 25.0,
-                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 80.0, ["Step"] = 1.0 },
-                ["ScriptFunction"] = function(self, val)
-                    OnChaseSettingModified()
-                end
-            },
-            ["Chase_OverlapBuffer"] = {
-                ["DisplayDescription"] = "Distance overlap for smooth hysteresis crossfade between layers (studs)",
-                ["DisplayTitle"] = "Layer Overlap Buffer",
-                ["LayoutOrder"] = 7,
-                ["Savable"] = true,
-                ["InstanceType"] = "NumberValue",
-                ["DefaultInstanceValue"] = 3.57,
-                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 10.0, ["Step"] = 0.05 },
-                ["ScriptFunction"] = function(self, val)
-                    OnChaseSettingModified()
-                end
-            },
             ["Chase_FadeTime"] = {
                 ["DisplayDescription"] = "Duration of smooth volume fade and crossfade between layers (seconds)",
                 ["DisplayTitle"] = "Fade / Crossfade Time",
-                ["LayoutOrder"] = 8,
+                ["LayoutOrder"] = 9,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 0.6,
@@ -3726,10 +3245,34 @@ task.spawn(function()
                     OnChaseSettingModified()
                 end
             },
+            ["Chase_OverlapBuffer"] = {
+                ["DisplayDescription"] = "Distance overlap for smooth hysteresis crossfade between layers (studs)",
+                ["DisplayTitle"] = "Layer Overlap Buffer",
+                ["LayoutOrder"] = 10,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 3.57,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 10.0, ["Step"] = 0.05 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_BonusExpansion"] = {
+                ["DisplayDescription"] = "Extra distance added when Chase absorbs all layers (Total Size + Bonus studs)",
+                ["DisplayTitle"] = "Chase Absorbed Bonus (Studs)",
+                ["LayoutOrder"] = 11,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 25.0,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 80.0, ["Step"] = 1.0 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
             ["Chase_StartDelay"] = {
                 ["DisplayDescription"] = "Delay before chase audio can start playing when round begins (seconds)",
                 ["DisplayTitle"] = "Round Start Delay",
-                ["LayoutOrder"] = 9,
+                ["LayoutOrder"] = 12,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 2.0,
@@ -3738,10 +3281,44 @@ task.spawn(function()
                     OnChaseSettingModified()
                 end
             },
+            ["Chase_HasChase"] = {
+                ["DisplayDescription"] = "Enable or disable Chase segment (Layer 4)",
+                ["DisplayTitle"] = "Enable: Chase Segment",
+                ["LayoutOrder"] = 13,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                    SyncChaseAudio()
+                end
+            },
+            ["Chase_FadeIn_Chase"] = {
+                ["DisplayDescription"] = "Smooth volume fade-in when entering Chase layer",
+                ["DisplayTitle"] = "Chase: Fade In",
+                ["LayoutOrder"] = 14,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_FadeOut_Chase"] = {
+                ["DisplayDescription"] = "Smooth volume fade-out when exiting Chase layer",
+                ["DisplayTitle"] = "Chase: Fade Out",
+                ["LayoutOrder"] = 15,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
             ["Chase_DistChase"] = {
                 ["DisplayDescription"] = "Base distance threshold for active Chase (Layer 4) in studs",
                 ["DisplayTitle"] = "Base Distance: Chase",
-                ["LayoutOrder"] = 10,
+                ["LayoutOrder"] = 16,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 22,
@@ -3750,10 +3327,44 @@ task.spawn(function()
                     OnChaseSettingModified()
                 end
             },
+            ["Chase_HasLay3"] = {
+                ["DisplayDescription"] = "Enable or disable Layer 3 segment (Close Terror)",
+                ["DisplayTitle"] = "Enable: Layer 3 Segment",
+                ["LayoutOrder"] = 17,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                    SyncChaseAudio()
+                end
+            },
+            ["Chase_FadeIn_Lay3"] = {
+                ["DisplayDescription"] = "Smooth volume fade-in when entering Layer 3",
+                ["DisplayTitle"] = "Layer 3: Fade In",
+                ["LayoutOrder"] = 18,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_FadeOut_Lay3"] = {
+                ["DisplayDescription"] = "Smooth volume fade-out when exiting Layer 3",
+                ["DisplayTitle"] = "Layer 3: Fade Out",
+                ["LayoutOrder"] = 19,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
             ["Chase_DistLay3"] = {
                 ["DisplayDescription"] = "Base distance threshold for Layer 3 (Close Terror) in studs",
                 ["DisplayTitle"] = "Base Distance: Layer 3",
-                ["LayoutOrder"] = 11,
+                ["LayoutOrder"] = 20,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 40,
@@ -3762,10 +3373,44 @@ task.spawn(function()
                     OnChaseSettingModified()
                 end
             },
+            ["Chase_HasLay2"] = {
+                ["DisplayDescription"] = "Enable or disable Layer 2 segment (Medium Terror)",
+                ["DisplayTitle"] = "Enable: Layer 2 Segment",
+                ["LayoutOrder"] = 21,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                    SyncChaseAudio()
+                end
+            },
+            ["Chase_FadeIn_Lay2"] = {
+                ["DisplayDescription"] = "Smooth volume fade-in when entering Layer 2",
+                ["DisplayTitle"] = "Layer 2: Fade In",
+                ["LayoutOrder"] = 22,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_FadeOut_Lay2"] = {
+                ["DisplayDescription"] = "Smooth volume fade-out when exiting Layer 2",
+                ["DisplayTitle"] = "Layer 2: Fade Out",
+                ["LayoutOrder"] = 23,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
             ["Chase_DistLay2"] = {
                 ["DisplayDescription"] = "Base distance threshold for Layer 2 (Medium Terror) in studs",
                 ["DisplayTitle"] = "Base Distance: Layer 2",
-                ["LayoutOrder"] = 12,
+                ["LayoutOrder"] = 24,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 60,
@@ -3774,10 +3419,44 @@ task.spawn(function()
                     OnChaseSettingModified()
                 end
             },
+            ["Chase_HasLay1"] = {
+                ["DisplayDescription"] = "Enable or disable Layer 1 segment (Far Terror)",
+                ["DisplayTitle"] = "Enable: Layer 1 Segment",
+                ["LayoutOrder"] = 25,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                    SyncChaseAudio()
+                end
+            },
+            ["Chase_FadeIn_Lay1"] = {
+                ["DisplayDescription"] = "Smooth volume fade-in when entering Layer 1",
+                ["DisplayTitle"] = "Layer 1: Fade In",
+                ["LayoutOrder"] = 26,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_FadeOut_Lay1"] = {
+                ["DisplayDescription"] = "Smooth volume fade-out when exiting Layer 1",
+                ["DisplayTitle"] = "Layer 1: Fade Out",
+                ["LayoutOrder"] = 27,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
             ["Chase_DistLay1"] = {
                 ["DisplayDescription"] = "Base distance threshold for Layer 1 (Far Terror) in studs",
                 ["DisplayTitle"] = "Base Distance: Layer 1",
-                ["LayoutOrder"] = 13,
+                ["LayoutOrder"] = 28,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 85,
@@ -3785,21 +3464,8 @@ task.spawn(function()
                 ["ScriptFunction"] = function(self, val)
                     OnChaseSettingModified()
                 end
-            },
-            ["Chase_PlaybackSpeed"] = {
-                ["DisplayDescription"] = "Playback speed and pitch multiplier for Chase audio",
-                ["DisplayTitle"] = "Playback Speed (Pitch)",
-                ["LayoutOrder"] = 14,
-                ["Savable"] = true,
-                ["InstanceType"] = "NumberValue",
-                ["DefaultInstanceValue"] = 1.0,
-                ["ExtraData"] = { ["MinValue"] = 0.5, ["MaxValue"] = 2.0, ["Step"] = 0.05 },
-                ["ScriptFunction"] = function(self, val)
-                    OnChaseSettingModified()
-                end
             }
         },
-
         ["Fun_Wheel"] = {
             ["TabAttributes"] = {
                 ["DisplayTitle"] = "Fun: Native Emote Wheel (Killer FE)",
@@ -4019,7 +3685,6 @@ task.spawn(function()
         }
     }
 
-    HandleUIFeatures("Visual_NightMode", AddonsPackage["Visual_NightMode"])
     HandleUIFeatures("Visual_Generators", AddonsPackage["Visual_Generators"])
     HandleUIFeatures("Visual_VeeGraffiti", AddonsPackage["Visual_VeeGraffiti"])
     HandleUIFeatures("Custom_LMS", AddonsPackage["Custom_LMS"])
@@ -4236,7 +3901,7 @@ task.spawn(function()
         for _, item in ipairs(ContentsScrolling:GetChildren()) do
             if item:IsA("GuiObject") and not item:IsA("UIListLayout") and not item:IsA("UIPadding") and item ~= CanvasAutoSpacer then
                 local ownerTab = FastGetItemTab(item)
-                local isVisualItem = (ownerTab == "Visual_NightMode" or ownerTab == "Visual_Generators" or ownerTab == "Visual_Camera" or ownerTab == "Visual_VeeGraffiti")
+                local isVisualItem = (ownerTab == "Visual_Generators" or ownerTab == "Visual_Camera" or ownerTab == "Visual_VeeGraffiti")
                 local isMusicItem = (ownerTab == "Custom_LMS" or ownerTab == "Custom_2v3" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase")
                 local isFunItem = (ownerTab == "Fun_Wheel" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
 
@@ -4464,7 +4129,7 @@ task.spawn(function()
         for _, item in ipairs(ContentsScrolling:GetChildren()) do
             if item:IsA("GuiObject") and not item:IsA("UIListLayout") and not item:IsA("UIPadding") and item ~= CanvasAutoSpacer then
                 local ownerTab = FastGetItemTab(item)
-                local isAddonItem = (ownerTab == "Visual_NightMode" or ownerTab == "Visual_Generators" or ownerTab == "Visual_VeeGraffiti" or ownerTab == "Custom_LMS" or ownerTab == "Custom_2v3" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase" or ownerTab == "Fun_Wheel" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
+                local isAddonItem = (ownerTab == "Visual_Generators" or ownerTab == "Visual_VeeGraffiti" or ownerTab == "Custom_LMS" or ownerTab == "Custom_2v3" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase" or ownerTab == "Fun_Wheel" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
                 if not isAddonItem and SavedOriginalVisibility[item] == nil then
                     SavedOriginalVisibility[item] = item.Visible
                 end
