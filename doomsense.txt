@@ -188,6 +188,11 @@ task.spawn(function()
         return false
     end
 
+    local RoundOverStartTime = nil
+    local function IsRoundOverFadeActive()
+        return RoundOverStartTime ~= nil and (os.clock() - RoundOverStartTime < 2.0)
+    end
+
     local function IsInLobby()
         local map = workspace:FindFirstChild("Map")
         local ingame = map and map:FindFirstChild("Ingame")
@@ -196,7 +201,7 @@ task.spawn(function()
             return true
         end
 
-        if IsRoundOver() then
+        if IsRoundOver() and not IsRoundOverFadeActive() then
             return true
         end
 
@@ -274,7 +279,7 @@ task.spawn(function()
     end
 
     local function CanRunChase()
-        if IsInLobby() or IsRoundOver() then return false end
+        if IsInLobby() or (IsRoundOver() and not IsRoundOverFadeActive()) then return false end
         if not GetValue("Chase_Active") then return false end
         if IsLocalKiller() then return true end
         if GetValue("Chase_SurvivorMode") == true then
@@ -759,7 +764,7 @@ task.spawn(function()
         UpdateDropdownOptions("TwoVThree_KillerTrack", kOpts)
         UpdateDropdownOptions("Chase_Track", cOpts)
         UpdateDropdownOptions("Chase_SurvTrack", cOpts)
-        UpdateDropdownOptions("Chase_ConfigTrack", cOpts)
+        UpdateDropdownOptions("Chase_ConfigTrack", "Auto|" .. cOpts)
 
         if notify and typeof(ColoredPrint) == "function" then
             ColoredPrint("Audio Library Rescanned Successfully!", "success", Color3.fromRGB(0, 255, 128))
@@ -1046,16 +1051,17 @@ task.spawn(function()
             end
         end
 
+        local isMode2v12 = (#killModels >= 2) or (IsTwoKillersMode and IsTwoKillersMode())
+        local maxSurvLimit = isMode2v12 and 3 or 1
+
         if survFolder then
             for _, c in ipairs(survFolder:GetChildren()) do
                 if IsModelAlive(c) then
                     table.insert(survModels, c)
-                    if #survModels >= 3 then break end
+                    if #survModels >= maxSurvLimit then break end
                 end
             end
         end
-
-        local isMode2v12 = (#killModels >= 2) or (isTest and (GetValue("TwoVThree_SurvTrack") ~= "None" or GetValue("TwoVThree_KillerTrack") ~= "None"))
 
         if #survModels == 0 and myChar and myRole == "Survivor" then
             table.insert(survModels, myChar)
@@ -1227,7 +1233,7 @@ task.spawn(function()
 
         local leftExcl = Instance.new("TextLabel", leftGroup)
         leftExcl.Size = UDim2.new(0, 180, 0, 180)
-        leftExcl.Position = UDim2.new(1, isMode2v12 and -135 or -140, 0, isMode2v12 and (sLastBottom - 74) or 45)
+        leftExcl.Position = UDim2.new(1, isMode2v12 and -135 or -140, 0, (isMode2v12 and survCount > 1) and (sLastBottom - 74) or 45)
         leftExcl.BackgroundTransparency = 1
         leftExcl.Text = "!"
         leftExcl.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -1306,7 +1312,7 @@ task.spawn(function()
 
         local rightExcl = Instance.new("TextLabel", rightGroup)
         rightExcl.Size = UDim2.new(0, 180, 0, 180)
-        rightExcl.Position = UDim2.new(0, isMode2v12 and -45 or -40, 0, isMode2v12 and (kLastBottom - 74) or 45)
+        rightExcl.Position = UDim2.new(0, isMode2v12 and -45 or -40, 0, (isMode2v12 and killCount > 1) and (kLastBottom - 74) or 45)
         rightExcl.BackgroundTransparency = 1
         rightExcl.Text = "!"
         rightExcl.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -1825,14 +1831,29 @@ task.spawn(function()
     end
 
     local IsConfigLoading = false
+    local AutoConfigApplying = false
+    local LastAutoConfigTrack = nil
+
+    local function GetCurrentRoleTrack()
+        local track = "None"
+        if IsLocalKiller() then
+            track = GetValue("Chase_Track") or "None"
+        else
+            track = GetValue("Chase_SurvTrack") or "None"
+            if track == "None" then
+                track = GetValue("Chase_Track") or "None"
+            end
+        end
+        return track
+    end
 
     local function GetTrackConfigPath(trackName)
-        if not trackName or trackName == "None" or trackName == "Off" then return nil end
+        if not trackName or trackName == "None" or trackName == "Off" or trackName == "Auto" then return nil end
         return CHASE_DIR .. "/" .. trackName .. "_Settings.txt"
     end
 
     local function SaveTrackConfig(trackName)
-        if IsConfigLoading or not isfile or not writefile or not trackName or trackName == "None" or trackName == "Off" then return end
+        if IsConfigLoading or AutoConfigApplying or not isfile or not writefile or not trackName or trackName == "None" or trackName == "Off" or trackName == "Auto" then return end
         local cfgPath = GetTrackConfigPath(trackName)
         if not cfgPath then return end
 
@@ -1942,17 +1963,34 @@ task.spawn(function()
     end
 
     local function OnChaseSettingModified()
+        if IsConfigLoading or AutoConfigApplying then return end
         local cfgTrack = GetValue("Chase_ConfigTrack")
-        if not cfgTrack or cfgTrack == "None" or cfgTrack == "Off" then
-            cfgTrack = IsLocalKiller() and GetValue("Chase_Track") or GetValue("Chase_SurvTrack")
-            if not cfgTrack or cfgTrack == "None" or cfgTrack == "Off" then
-                cfgTrack = GetValue("Chase_Track")
-            end
+        if not cfgTrack or cfgTrack == "None" or cfgTrack == "Off" or cfgTrack == "Auto" then
+            cfgTrack = GetCurrentRoleTrack()
         end
-        if cfgTrack and cfgTrack ~= "None" and cfgTrack ~= "Off" then
+        if cfgTrack and cfgTrack ~= "None" and cfgTrack ~= "Off" and cfgTrack ~= "Auto" then
             SaveTrackConfig(cfgTrack)
         end
     end
+
+    RunService.Heartbeat:Connect(function()
+        if GetValue("Chase_ConfigTrack") ~= "Auto" then
+            LastAutoConfigTrack = nil
+            return
+        end
+
+        local activeTrack = GetCurrentRoleTrack()
+        if activeTrack ~= LastAutoConfigTrack then
+            LastAutoConfigTrack = activeTrack
+            if activeTrack and activeTrack ~= "None" and activeTrack ~= "Off" then
+                AutoConfigApplying = true
+                LoadTrackConfig(activeTrack)
+                task.delay(0.15, function()
+                    AutoConfigApplying = false
+                end)
+            end
+        end
+    end)
 
     local function SilenceThemesForCustomChase(fadeTime)
         if not CanRunChase() or IsInLobby() then return end
@@ -2055,11 +2093,11 @@ task.spawn(function()
         end
     end
 
-    -- [ Dual-Voice Crossfader ]
+    -- [ Dual-Voice Crossfader with Non-Overlapping Transitions ]
     local function PlayChaseSegment(assetId, tierName, segment, isTransition, nextTierName, nextSegment)
-        Chase_State.CurrentTierName = tierName
+        Chase_State.CurrentTierName = nextTierName or tierName
         Chase_State.IsLoading = true
-        Chase_State.IsTransitioning = isTransition == true
+        Chase_State.IsTransitioning = (isTransition == true)
 
         local baseVol = tonumber(GetValue("Chase_Volume")) or 1.0
         local pitch = tonumber(GetValue("Chase_PlaybackSpeed")) or 1.0
@@ -2115,39 +2153,50 @@ task.spawn(function()
         local function SetupLoop()
             Chase_State.IsLoading = false
             if not newVoice or not newVoice.Parent then return end
-            if segment and segment.Start and segment.End then
+
+            if isTransition and segment and nextSegment then
                 newVoice.Looped = false
                 newVoice.TimePosition = segment.Start
 
-                if isTransition then
-                    local conn
-                    conn = RunService.Heartbeat:Connect(function()
-                        if newVoice and newVoice.IsPlaying then
-                            if newVoice.TimePosition >= segment.End then
-                                Chase_State.IsTransitioning = false
-                                if conn then conn:Disconnect() end
-                                if nextTierName and nextSegment then
-                                    PlayChaseSegment(assetId, nextTierName, nextSegment, false, nil, nil)
-                                end
-                            end
-                        else
-                            if conn then conn:Disconnect() end
+                local currentSeg = segment
+                local inTransitionPhase = true
+
+                local conn
+                conn = RunService.Heartbeat:Connect(function()
+                    if not newVoice or not newVoice.Parent or not newVoice.IsPlaying then
+                        if conn then conn:Disconnect() end
+                        return
+                    end
+
+                    if inTransitionPhase then
+                        if newVoice.TimePosition >= currentSeg.End then
+                            inTransitionPhase = false
+                            Chase_State.IsTransitioning = false
+                            currentSeg = nextSegment
+                            newVoice.TimePosition = nextSegment.Start
                         end
-                    end)
-                    if targetVoiceSlot == "B" then Chase_State.LoopConnB = conn else Chase_State.LoopConnA = conn end
-                else
-                    local conn
-                    conn = RunService.Heartbeat:Connect(function()
-                        if newVoice and newVoice.IsPlaying then
-                            if newVoice.TimePosition >= segment.End then
-                                newVoice.TimePosition = segment.Start
-                            end
-                        else
-                            if conn then conn:Disconnect() end
+                    else
+                        if newVoice.TimePosition >= currentSeg.End then
+                            newVoice.TimePosition = currentSeg.Start
                         end
-                    end)
-                    if targetVoiceSlot == "B" then Chase_State.LoopConnB = conn else Chase_State.LoopConnA = conn end
-                end
+                    end
+                end)
+
+                if targetVoiceSlot == "B" then Chase_State.LoopConnB = conn else Chase_State.LoopConnA = conn end
+            elseif segment and segment.Start and segment.End then
+                newVoice.Looped = false
+                newVoice.TimePosition = segment.Start
+                local conn
+                conn = RunService.Heartbeat:Connect(function()
+                    if newVoice and newVoice.IsPlaying then
+                        if newVoice.TimePosition >= segment.End then
+                            newVoice.TimePosition = segment.Start
+                        end
+                    else
+                        if conn then conn:Disconnect() end
+                    end
+                end)
+                if targetVoiceSlot == "B" then Chase_State.LoopConnB = conn else Chase_State.LoopConnA = conn end
             else
                 newVoice.Looped = true
             end
@@ -2191,13 +2240,11 @@ task.spawn(function()
         local rLay2Base  = (tonumber(GetValue("Chase_DistLay2")) or 60) * mult
         local rLay1Base  = (tonumber(GetValue("Chase_DistLay1")) or 85) * mult
 
-        -- Maximum outer reach across active terror radius layers
         local rTotalSize = (hasLay1 and rLay1Base)
             or (hasLay2 and rLay2Base)
             or (hasLay3 and rLay3Base)
             or rChaseBase
 
-        -- Total absorbed boundary: when in chase/layer, it absorbs all smaller layers into the collective maximum contact reach
         local rChaseAbsorbed = rTotalSize + bonus + buffer
         local rLay3Absorbed  = (hasLay1 or hasLay2) and (rTotalSize + buffer) or (rLay3Base + buffer)
         local rLay2Absorbed  = hasLay1 and (rTotalSize + buffer) or (rLay2Base + buffer)
@@ -2212,7 +2259,6 @@ task.spawn(function()
         local killFolder = workspace.Players:FindFirstChild("Killers")
         local specFolder = workspace.Players:FindFirstChild("Spectating")
 
-        -- Live survivors check to eliminate false chase triggers on death
         local activeSurvivorsCount = 0
         local lastSurvHealth = 0
         if survFolder then
@@ -2278,13 +2324,11 @@ task.spawn(function()
                 local targetHum = spectatedChar:FindFirstChildOfClass("Humanoid")
                 local isTargetAlive = (spectatedChar:GetAttribute("Dead") ~= true) and (not targetHum or targetHum.Health > 0)
 
-                -- Disables return 4 immediately if spectated survivor reached 0 HP or no survivors are alive
                 if not anySurvivorAlive or not isTargetAlive then
                     return 0
                 end
 
                 if spectatedChar:IsDescendantOf(killFolder) then
-                    -- Trigger: if last survivor has 0 HP or less, shut down return 4 immediately
                     if not anySurvivorAlive or activeSurvivorsCount <= 0 or lastSurvHealth <= 0 then
                         return 0
                     end
@@ -2335,7 +2379,7 @@ task.spawn(function()
             return c
         end
 
-        -- HoldPlayerTrigger: Original cumulative absorption of previously triggered layers into the total contact threshold
+        -- HoldPlayerTrigger
         if cur == 4 then
             if hasChase and CountInZone(rChaseAbsorbed) > 0 then
                 return 4
@@ -2516,7 +2560,6 @@ task.spawn(function()
             return
         end
 
-        -- Immediate priority override for close chase
         if targetLayer == 4 and Chase_State.CurrentTierName ~= "Chase" then
             Chase_State.IsTransitioning = false
         elseif (Chase_State.IsTransitioning or Chase_State.IsLoading) and not isTrackHotswap then
@@ -2568,6 +2611,43 @@ task.spawn(function()
             RoundSpawnTime = os.clock()
         end
         WasInLobbyState = inLobbyNow
+
+        local roundOverNow = IsRoundOver()
+        if roundOverNow then
+            if not RoundOverStartTime and (Chase_State.VoiceA or Chase_State.VoiceB) then
+                RoundOverStartTime = os.clock()
+                local function FadeEndingVoice(v)
+                    if not v or not v.Parent or v:GetAttribute("FadingOut") then return end
+                    v:SetAttribute("FadingOut", true)
+                    local tw = TweenService:Create(v, TweenInfo.new(2.0, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = 0 })
+                    tw:Play()
+                    tw.Completed:Once(function()
+                        v:Stop()
+                        v:Destroy()
+                    end)
+                    Debris:AddItem(v, 2.25)
+                end
+                FadeEndingVoice(Chase_State.VoiceA); Chase_State.VoiceA = nil
+                FadeEndingVoice(Chase_State.VoiceB); Chase_State.VoiceB = nil
+                Chase_State.CurrentLayer = 0
+                Chase_State.CurrentTierName = nil
+                Chase_State.IsTransitioning = false
+                if Chase_State.LoopConnA then Chase_State.LoopConnA:Disconnect(); Chase_State.LoopConnA = nil end
+                if Chase_State.LoopConnB then Chase_State.LoopConnB:Disconnect(); Chase_State.LoopConnB = nil end
+            end
+
+            if RoundOverStartTime then
+                if os.clock() - RoundOverStartTime < 2.0 then
+                    return
+                else
+                    RoundOverStartTime = nil
+                    StopChaseAudio(true)
+                    return
+                end
+            end
+        else
+            RoundOverStartTime = nil
+        end
 
         if not CanRunChase() or inLobbyNow then
             if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
@@ -3224,10 +3304,12 @@ task.spawn(function()
                 ["LayoutOrder"] = 2,
                 ["Savable"] = true,
                 ["InstanceType"] = "StringValue",
-                ["DefaultInstanceValue"] = "None",
-                ["ExtraData"] = { ["Options"] = initChase },
+                ["DefaultInstanceValue"] = "Auto",
+                ["ExtraData"] = { ["Options"] = "Auto|" .. initChase },
                 ["ScriptFunction"] = function(self, val)
-                    if val and val ~= "None" and val ~= "Off" then
+                    if val == "Auto" then
+                        LastAutoConfigTrack = nil
+                    elseif val and val ~= "None" and val ~= "Off" then
                         LoadTrackConfig(val)
                     end
                 end
