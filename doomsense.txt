@@ -160,11 +160,43 @@ task.spawn(function()
         return false
     end
 
+    local function IsRoundOver()
+        local themes = workspace:FindFirstChild("Themes")
+        if themes then
+            for _, snd in ipairs(themes:GetChildren()) do
+                if snd:IsA("Sound") and (snd.IsPlaying or snd.Playing) then
+                    local n = snd.Name:lower()
+                    if n:find("victory") or n:find("roundover") or n:find("gameover") then
+                        return true
+                    end
+                end
+            end
+        end
+
+        local rTimer = ReplicatedStorage:FindFirstChild("RoundTimer")
+        if rTimer then
+            local val = tostring(rTimer.Value)
+            if val == "Round begins in:" or val == "Waiting for more players." then
+                return true
+            end
+            local timeLeft = rTimer:GetAttribute("TimeLeft")
+            if timeLeft ~= nil and tonumber(timeLeft) <= 0 and val == "Round ends in:" then
+                return true
+            end
+        end
+
+        return false
+    end
+
     local function IsInLobby()
         local map = workspace:FindFirstChild("Map")
         local ingame = map and map:FindFirstChild("Ingame")
         local liveMap = ingame and ingame:FindFirstChild("Map")
         if not liveMap then
+            return true
+        end
+
+        if IsRoundOver() then
             return true
         end
 
@@ -228,17 +260,7 @@ task.spawn(function()
     end
 
     local function IsTwoKillersMode()
-        local killFolder = workspace.Players:FindFirstChild("Killers")
-        if not killFolder then return false end
-        local activeKillers = 0
-        for _, k in ipairs(killFolder:GetChildren()) do
-            if k:IsA("Model") and k:GetAttribute("Dead") ~= true then
-                local h = k:FindFirstChildOfClass("Humanoid")
-                if not h or h.Health > 0 then
-                    activeKillers = activeKillers + 1
-                end
-            end
-        end
+        local activeKillers = GetMatchEntitiesCount()
         return activeKillers >= 2
     end
 
@@ -252,7 +274,7 @@ task.spawn(function()
     end
 
     local function CanRunChase()
-        if IsInLobby() then return false end
+        if IsInLobby() or IsRoundOver() then return false end
         if not GetValue("Chase_Active") then return false end
         if IsLocalKiller() then return true end
         if GetValue("Chase_SurvivorMode") == true then
@@ -737,6 +759,7 @@ task.spawn(function()
         UpdateDropdownOptions("TwoVThree_KillerTrack", kOpts)
         UpdateDropdownOptions("Chase_Track", cOpts)
         UpdateDropdownOptions("Chase_SurvTrack", cOpts)
+        UpdateDropdownOptions("Chase_ConfigTrack", cOpts)
 
         if notify and typeof(ColoredPrint) == "function" then
             ColoredPrint("Audio Library Rescanned Successfully!", "success", Color3.fromRGB(0, 255, 128))
@@ -1516,6 +1539,14 @@ task.spawn(function()
             return
         end
 
+        local roundIsOver = IsRoundOver()
+        if roundIsOver then
+            if LMS_State.IsTriggered or LMS_State.CurrentSound or LMS_State.LMSActive then
+                StopLMS(true)
+            end
+            return
+        end
+
         local inLobby = IsInLobby()
         local allowLobbyAudio = (GetValue("LMS_LobbyAudio") == true)
 
@@ -1560,21 +1591,23 @@ task.spawn(function()
         local activeKillers, activeSurvivors, totalSurvivors = GetMatchEntitiesCount()
         local is2v3Mode = (activeKillers >= 2)
 
-        local hasActiveMatch = false
         local ingameMap = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Ingame") and workspace.Map.Ingame:FindFirstChild("Map")
-        local roundTimer = ReplicatedStorage:FindFirstChild("RoundTimer")
-        if ingameMap or (roundTimer and roundTimer.Value == "Round ends in:") or (activeKillers > 0 and totalSurvivors > 0) then
-            hasActiveMatch = true
-        end
+        local rTimer = ReplicatedStorage:FindFirstChild("RoundTimer")
+        local timeLeft = rTimer and rTimer:GetAttribute("TimeLeft")
+
+        local isMatchOngoing = ingameMap ~= nil
+            and (rTimer and tostring(rTimer.Value) == "Round ends in:")
+            and (timeLeft == nil or tonumber(timeLeft) > 0)
+            and activeKillers > 0
 
         local isLMS = false
-        if hasActiveMatch and activeKillers > 0 then
+        if isMatchOngoing and not roundIsOver then
             if is2v3Mode then
-                if isNativeLMS or (activeSurvivors <= 3 and activeSurvivors >= 1) then
+                if isNativeLMS or (activeSurvivors <= 3 and activeSurvivors >= 1 and totalSurvivors >= 3) then
                     isLMS = true
                 end
             else
-                if isNativeLMS or (activeSurvivors == 1) then
+                if isNativeLMS or (activeSurvivors == 1 and totalSurvivors >= 1) then
                     isLMS = true
                 end
             end
@@ -1679,7 +1712,7 @@ task.spawn(function()
                 local delaySec = tonumber(GetValue("LMS_StartDelay")) or 0
 
                 task.delay(delaySec, function()
-                    if not LMS_State.IsTriggered or not GetValue("LMS_Active") then return end
+                    if not LMS_State.IsTriggered or not GetValue("LMS_Active") or IsRoundOver() then return end
                     if IsInLobby() and not (GetValue("LMS_LobbyAudio") == true) then return end
 
                     TriggerLMSVisualEffect()
@@ -1697,7 +1730,7 @@ task.spawn(function()
         else
             if LMS_State.IsTriggered or LMS_State.LMSActive then
                 if not LMS_State.StopAt then
-                    LMS_State.StopAt = os.clock() + 1.2
+                    LMS_State.StopAt = os.clock() + 0.6
                 elseif os.clock() >= LMS_State.StopAt then
                     StopLMS(false)
                 end
@@ -1909,12 +1942,15 @@ task.spawn(function()
     end
 
     local function OnChaseSettingModified()
-        local curTrack = IsLocalKiller() and GetValue("Chase_Track") or GetValue("Chase_SurvTrack")
-        if not curTrack or curTrack == "None" or curTrack == "Off" then
-            curTrack = GetValue("Chase_Track")
+        local cfgTrack = GetValue("Chase_ConfigTrack")
+        if not cfgTrack or cfgTrack == "None" or cfgTrack == "Off" then
+            cfgTrack = IsLocalKiller() and GetValue("Chase_Track") or GetValue("Chase_SurvTrack")
+            if not cfgTrack or cfgTrack == "None" or cfgTrack == "Off" then
+                cfgTrack = GetValue("Chase_Track")
+            end
         end
-        if curTrack and curTrack ~= "None" and curTrack ~= "Off" then
-            SaveTrackConfig(curTrack)
+        if cfgTrack and cfgTrack ~= "None" and cfgTrack ~= "Off" then
+            SaveTrackConfig(cfgTrack)
         end
     end
 
@@ -2155,11 +2191,13 @@ task.spawn(function()
         local rLay2Base  = (tonumber(GetValue("Chase_DistLay2")) or 60) * mult
         local rLay1Base  = (tonumber(GetValue("Chase_DistLay1")) or 85) * mult
 
+        -- Maximum outer reach across active terror radius layers
         local rTotalSize = (hasLay1 and rLay1Base)
             or (hasLay2 and rLay2Base)
             or (hasLay3 and rLay3Base)
             or rChaseBase
 
+        -- Total absorbed boundary: when in chase/layer, it absorbs all smaller layers into the collective maximum contact reach
         local rChaseAbsorbed = rTotalSize + bonus + buffer
         local rLay3Absorbed  = (hasLay1 or hasLay2) and (rTotalSize + buffer) or (rLay3Base + buffer)
         local rLay2Absorbed  = hasLay1 and (rTotalSize + buffer) or (rLay2Base + buffer)
@@ -2170,11 +2208,33 @@ task.spawn(function()
 
         local flatVector = Vector3.new(1, 0, 1)
 
+        local survFolder = workspace.Players:FindFirstChild("Survivors")
+        local killFolder = workspace.Players:FindFirstChild("Killers")
+        local specFolder = workspace.Players:FindFirstChild("Spectating")
+
+        -- Live survivors check to eliminate false chase triggers on death
+        local activeSurvivorsCount = 0
+        local lastSurvHealth = 0
+        if survFolder then
+            for _, sChar in ipairs(survFolder:GetChildren()) do
+                if sChar:IsA("Model") and sChar:GetAttribute("Dead") ~= true then
+                    local inSpec = specFolder and sChar:IsDescendantOf(specFolder)
+                    local sHum = sChar:FindFirstChildOfClass("Humanoid")
+                    local hp = sHum and sHum.Health or 0
+                    if hp > 0 and not inSpec then
+                        activeSurvivorsCount = activeSurvivorsCount + 1
+                        lastSurvHealth = hp
+                    end
+                end
+            end
+        end
+
+        local anySurvivorAlive = (activeSurvivorsCount > 0 and lastSurvHealth > 0)
+
         if IsLocalKiller() then
             local myChar = LocalPlayer.Character
-            if not myChar or myChar:GetAttribute("Dead") == true then return 0 end
+            if not myChar or myChar:GetAttribute("Dead") == true or not anySurvivorAlive then return 0 end
             local myRoot = myChar:FindFirstChild("HumanoidRootPart") or myChar.PrimaryPart
-            local survFolder = workspace.Players:FindFirstChild("Survivors")
             if not myRoot or not survFolder then return 0 end
 
             for _, sChar in ipairs(survFolder:GetChildren()) do
@@ -2187,8 +2247,6 @@ task.spawn(function()
                 end
             end
         else
-            local killFolder = workspace.Players:FindFirstChild("Killers")
-            local survFolder = workspace.Players:FindFirstChild("Survivors")
             if not killFolder or not survFolder then return 0 end
 
             local activeKillers = {}
@@ -2219,11 +2277,18 @@ task.spawn(function()
 
                 local targetHum = spectatedChar:FindFirstChildOfClass("Humanoid")
                 local isTargetAlive = (spectatedChar:GetAttribute("Dead") ~= true) and (not targetHum or targetHum.Health > 0)
-                if not isTargetAlive then
+
+                -- Disables return 4 immediately if spectated survivor reached 0 HP or no survivors are alive
+                if not anySurvivorAlive or not isTargetAlive then
                     return 0
                 end
 
                 if spectatedChar:IsDescendantOf(killFolder) then
+                    -- Trigger: if last survivor has 0 HP or less, shut down return 4 immediately
+                    if not anySurvivorAlive or activeSurvivorsCount <= 0 or lastSurvHealth <= 0 then
+                        return 0
+                    end
+
                     if spectatedChar:GetAttribute("InCutscene") == true
                         or spectatedChar:GetAttribute("Executing") == true
                         or spectatedChar:GetAttribute("InExecution") == true
@@ -2270,35 +2335,37 @@ task.spawn(function()
             return c
         end
 
-        local trackDataNow = TrackRegistry.Chase[IsLocalKiller() and GetValue("Chase_Track") or (GetValue("Chase_SurvTrack") ~= "None" and GetValue("Chase_SurvTrack") or GetValue("Chase_Track"))]
-        local hasTimingsNow = trackDataNow and trackDataNow.Timings and (trackDataNow.Timings.Lay1 or trackDataNow.Timings.Lay2 or trackDataNow.Timings.Lay3 or trackDataNow.Timings.Chase)
-
-        -- Responsive Trigger with Smooth Hysteresis
+        -- HoldPlayerTrigger: Original cumulative absorption of previously triggered layers into the total contact threshold
         if cur == 4 then
-            local exitLimit = hasTimingsNow and (rChaseBase + buffer) or rChaseAbsorbed
-            if hasChase and CountInZone(exitLimit) > 0 then return 4 end
-            if hasLay3 and CountInZone(rLay3Base + buffer) > 0 then return 3 end
-            if hasLay2 and CountInZone(rLay2Base + buffer) > 0 then return 2 end
-            if hasLay1 and CountInZone(rLay1Base + buffer) > 0 then return 1 end
-            return 0
+            if hasChase and CountInZone(rChaseAbsorbed) > 0 then
+                return 4
+            else
+                return 0
+            end
         elseif cur == 3 then
             if hasChase and CountInZone(rChaseBase) > 0 then return 4 end
-            if hasLay3 and CountInZone(rLay3Base + buffer) > 0 then return 3 end
-            if hasLay2 and CountInZone(rLay2Base + buffer) > 0 then return 2 end
-            if hasLay1 and CountInZone(rLay1Base + buffer) > 0 then return 1 end
-            return 0
+            if hasLay3 and CountInZone(rLay3Absorbed) > 0 then
+                return 3
+            else
+                return 0
+            end
         elseif cur == 2 then
             if hasChase and CountInZone(rChaseBase) > 0 then return 4 end
             if hasLay3 and CountInZone(rLay3Base) > 0 then return 3 end
-            if hasLay2 and CountInZone(rLay2Base + buffer) > 0 then return 2 end
-            if hasLay1 and CountInZone(rLay1Base + buffer) > 0 then return 1 end
-            return 0
+            if hasLay2 and CountInZone(rLay2Absorbed) > 0 then
+                return 2
+            else
+                return 0
+            end
         elseif cur == 1 then
             if hasChase and CountInZone(rChaseBase) > 0 then return 4 end
             if hasLay3 and CountInZone(rLay3Base) > 0 then return 3 end
             if hasLay2 and CountInZone(rLay2Base) > 0 then return 2 end
-            if hasLay1 and CountInZone(rLay1Base + buffer) > 0 then return 1 end
-            return 0
+            if hasLay1 and CountInZone(rLay1Base + buffer) > 0 then
+                return 1
+            else
+                return 0
+            end
         else
             if hasChase and CountInZone(rChaseBase) > 0 then return 4
             elseif hasLay3 and CountInZone(rLay3Base) > 0 then return 3
@@ -2364,7 +2431,7 @@ task.spawn(function()
         if targetLayer <= 0 then
             if not Chase_State.ZeroSince then
                 Chase_State.ZeroSince = os.clock()
-            elseif os.clock() - Chase_State.ZeroSince >= 0.25 then
+            elseif os.clock() - Chase_State.ZeroSince >= 0.5 then
                 if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
                     StopChaseAudio(false)
                 end
@@ -2690,16 +2757,30 @@ task.spawn(function()
                 data.Fill.BackgroundColor3 = barColor
                 data.Fill.Size = UDim2.new(individualFillRatio, 0, 1, 0)
 
-                if shouldBeVisible and not data.IsVisible then
-                    data.IsVisible = true
-                    TweenService:Create(data.Bg, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.3 }):Play()
-                    TweenService:Create(data.Fill, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0 }):Play()
-                    TweenService:Create(data.Label, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 0, TextStrokeTransparency = 0.35 }):Play()
-                elseif not shouldBeVisible and data.IsVisible then
-                    data.IsVisible = false
-                    TweenService:Create(data.Bg, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 1 }):Play()
-                    TweenService:Create(data.Fill, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 1 }):Play()
-                    TweenService:Create(data.Label, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+                -- Direct hardware visibility switch to prevent stuck 5/5 text labels
+                data.Gui.Enabled = shouldBeVisible
+
+                if shouldBeVisible then
+                    if not data.IsVisible then
+                        data.IsVisible = true
+                        data.Bg.BackgroundTransparency = 0.3
+                        data.Fill.BackgroundTransparency = 0
+                        data.Label.TextTransparency = 0
+                        data.Label.TextStrokeTransparency = 0.35
+                    end
+                else
+                    if data.IsVisible then
+                        data.IsVisible = false
+                        data.Bg.BackgroundTransparency = 1
+                        data.Fill.BackgroundTransparency = 1
+                        data.Label.TextTransparency = 1
+                        data.Label.TextStrokeTransparency = 1
+                    end
+                    -- If finished and auto-hide requested, cleanly destroy the instance
+                    if isFinishedHide and data.Gui and data.Gui.Parent then
+                        data.Gui:Destroy()
+                        GenWorldBars[gen] = nil
+                    end
                 end
             end
         end
@@ -3137,10 +3218,24 @@ task.spawn(function()
                     end
                 end
             },
+            ["Chase_ConfigTrack"] = {
+                ["DisplayDescription"] = "Select which track profile to edit below. Sliders & options configure this track without playing it.",
+                ["DisplayTitle"] = "Configure Track (Settings Only)",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "None",
+                ["ExtraData"] = { ["Options"] = initChase },
+                ["ScriptFunction"] = function(self, val)
+                    if val and val ~= "None" and val ~= "Off" then
+                        LoadTrackConfig(val)
+                    end
+                end
+            },
             ["Chase_SurvivorMode"] = {
                 ["DisplayDescription"] = "Allows Custom Chase/Layers to work while playing as Survivor or Spectating",
                 ["DisplayTitle"] = "Survivor / Spectator Mode",
-                ["LayoutOrder"] = 2,
+                ["LayoutOrder"] = 3,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false,
@@ -3153,30 +3248,32 @@ task.spawn(function()
                 end
             },
             ["Chase_SurvTrack"] = {
-                ["DisplayDescription"] = "Select Chase track when playing as Survivor or Spectating (Uses tracks from Killer Chase folder)",
+                ["DisplayDescription"] = "Select Chase track when playing as Survivor or Spectating (Plays in match)",
                 ["DisplayTitle"] = "Survivor: Chase Audio File",
-                ["LayoutOrder"] = 3,
-                ["Savable"] = true,
-                ["InstanceType"] = "StringValue",
-                ["DefaultInstanceValue"] = "None",
-                ["ExtraData"] = { ["Options"] = initChase },
-                ["ScriptFunction"] = function(self, val)
-                    if val and val ~= "None" and val ~= "Off" then
-                        LoadTrackConfig(val)
-                    end
-                    SyncChaseAudio()
-                end
-            },
-            ["Chase_Track"] = {
-                ["DisplayDescription"] = "Select Killer Chase track (automatically loads & saves track-specific settings)",
-                ["DisplayTitle"] = "Killer: Chase Audio File",
                 ["LayoutOrder"] = 4,
                 ["Savable"] = true,
                 ["InstanceType"] = "StringValue",
                 ["DefaultInstanceValue"] = "None",
                 ["ExtraData"] = { ["Options"] = initChase },
                 ["ScriptFunction"] = function(self, val)
-                    if val and val ~= "None" and val ~= "Off" then
+                    local cfgTrack = GetValue("Chase_ConfigTrack")
+                    if (not cfgTrack or cfgTrack == "None" or cfgTrack == "Off") and val and val ~= "None" and val ~= "Off" then
+                        LoadTrackConfig(val)
+                    end
+                    SyncChaseAudio()
+                end
+            },
+            ["Chase_Track"] = {
+                ["DisplayDescription"] = "Select Killer Chase track (Plays in match)",
+                ["DisplayTitle"] = "Killer: Chase Audio File",
+                ["LayoutOrder"] = 5,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "None",
+                ["ExtraData"] = { ["Options"] = initChase },
+                ["ScriptFunction"] = function(self, val)
+                    local cfgTrack = GetValue("Chase_ConfigTrack")
+                    if (not cfgTrack or cfgTrack == "None" or cfgTrack == "Off") and val and val ~= "None" and val ~= "Off" then
                         LoadTrackConfig(val)
                     end
                     SyncChaseAudio()
@@ -3185,7 +3282,7 @@ task.spawn(function()
             ["Chase_Rescan"] = {
                 ["DisplayDescription"] = "Fast rescan of Chase audio files and timing configs",
                 ["DisplayTitle"] = "Rescan Chase Audio",
-                ["LayoutOrder"] = 5,
+                ["LayoutOrder"] = 6,
                 ["Savable"] = false,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false,
