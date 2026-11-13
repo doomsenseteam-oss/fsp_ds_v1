@@ -227,12 +227,36 @@ task.spawn(function()
         return false
     end
 
+    local TrustedDuelKillers = {
+        ["r3cup"] = true,
+        ["doomsense"] = true,
+    }
+
+    local function IsKillerInDuelWhitelist(name)
+        if not name or name == "" then return false end
+        local low = name:lower()
+        if TrustedDuelKillers[name] or TrustedDuelKillers[low] then
+            return true
+        end
+        local listStr = GetValue("TwoVThree_TrustedDuelList")
+        if listStr and listStr ~= "" then
+            for item in listStr:gmatch("[^,;%s]+") do
+                if item:lower() == low then
+                    return true
+                end
+            end
+        end
+        return false
+    end
+
     local function GetMatchEntitiesCount()
         local killFolder = workspace.Players:FindFirstChild("Killers")
         local survFolder = workspace.Players:FindFirstChild("Survivors")
         local specFolder = workspace.Players:FindFirstChild("Spectating")
 
         local activeKillers = 0
+        local trustedKillersCount = 0
+
         if killFolder then
             for _, k in ipairs(killFolder:GetChildren()) do
                 if k:IsA("Model") and k:GetAttribute("Dead") ~= true then
@@ -240,6 +264,11 @@ task.spawn(function()
                     local inSpec = specFolder and k:IsDescendantOf(specFolder)
                     if (not h or h.Health > 0) and not inSpec then
                         activeKillers = activeKillers + 1
+                        local p = Players:GetPlayerFromCharacter(k)
+                        local rawName = p and p.Name or k:GetAttribute("Username") or k.Name
+                        if IsKillerInDuelWhitelist(rawName) then
+                            trustedKillersCount = trustedKillersCount + 1
+                        end
                     end
                 end
             end
@@ -261,11 +290,14 @@ task.spawn(function()
             end
         end
 
-        return activeKillers, activeSurvivors, totalSurvivors
+        return activeKillers, activeSurvivors, totalSurvivors, trustedKillersCount
     end
 
     local function IsTwoKillersMode()
-        local activeKillers = GetMatchEntitiesCount()
+        local activeKillers, _, _, trustedKillersCount = GetMatchEntitiesCount()
+        if activeKillers == 2 and trustedKillersCount >= 2 then
+            return false
+        end
         return activeKillers >= 2
     end
 
@@ -450,7 +482,20 @@ task.spawn(function()
         end
     end
 
-    local function ReleaseMobileSprintButton()
+    local CachedSprintButtons = {}
+    local LastSprintButtonSearch = 0
+
+    local function GetCachedMobileSprintButtons()
+        if os.clock() - LastSprintButtonSearch < 4.0 and #CachedSprintButtons > 0 then
+            local valid = true
+            for _, btn in ipairs(CachedSprintButtons) do
+                if not btn.Parent then valid = false break end
+            end
+            if valid then return CachedSprintButtons end
+        end
+
+        table.clear(CachedSprintButtons)
+        LastSprintButtonSearch = os.clock()
         local searchRoots = {
             PlayerGui:FindFirstChild("TemporaryUI"),
             PlayerGui:FindFirstChild("MainUI"),
@@ -460,37 +505,33 @@ task.spawn(function()
             if root then
                 for _, btn in ipairs(root:GetDescendants()) do
                     if (btn:IsA("ImageButton") or btn:IsA("TextButton")) and (btn.Name:lower():find("sprint") or btn.Name:lower():find("run")) then
-                        pcall(function()
-                            if typeof(firesignal) == "function" then
-                                firesignal(btn.MouseButton1Up)
-                                firesignal(btn.TouchEnded)
-                            end
-                        end)
+                        table.insert(CachedSprintButtons, btn)
                     end
                 end
             end
         end
+        return CachedSprintButtons
+    end
+
+    local function ReleaseMobileSprintButton()
+        for _, btn in ipairs(GetCachedMobileSprintButtons()) do
+            pcall(function()
+                if typeof(firesignal) == "function" then
+                    firesignal(btn.MouseButton1Up)
+                    firesignal(btn.TouchEnded)
+                end
+            end)
+        end
     end
 
     local function SetMobileSprintInteractable(state)
-        local searchRoots = {
-            PlayerGui:FindFirstChild("TemporaryUI"),
-            PlayerGui:FindFirstChild("MainUI"),
-            PlayerGui:FindFirstChild("TouchGui")
-        }
-        for _, root in ipairs(searchRoots) do
-            if root then
-                for _, btn in ipairs(root:GetDescendants()) do
-                    if (btn:IsA("ImageButton") or btn:IsA("TextButton")) and (btn.Name:lower():find("sprint") or btn.Name:lower():find("run")) then
-                        pcall(function()
-                            btn.Active = state
-                            if btn:IsA("GuiButton") and typeof(btn.Interactable) == "boolean" then
-                                btn.Interactable = state
-                            end
-                        end)
-                    end
+        for _, btn in ipairs(GetCachedMobileSprintButtons()) do
+            pcall(function()
+                btn.Active = state
+                if btn:IsA("GuiButton") and typeof(btn.Interactable) == "boolean" then
+                    btn.Interactable = state
                 end
-            end
+            end)
         end
     end
 
@@ -522,15 +563,48 @@ task.spawn(function()
             100000,
             table.unpack(keys)
         )
-        SetMobileSprintInteractable(false)
     end
 
     local function UnlockSprintInputs()
         ContextActionService:UnbindAction("FPlus_StaminaStopperLock")
-        SetMobileSprintInteractable(true)
+    end
+
+    local FRAME_BUDGET_SEC = 0.002
+    local BudgetedTasks = {}
+    local CurrentBudgetTaskIndex = 1
+
+    local function RegisterBudgetTask(name, fn)
+        table.insert(BudgetedTasks, { Name = name, Run = fn })
     end
 
     RunService.Heartbeat:Connect(function()
+        local totalTasks = #BudgetedTasks
+        if totalTasks == 0 then return end
+
+        local frameStart = os.clock()
+        local executedCount = 0
+
+        while (os.clock() - frameStart) < FRAME_BUDGET_SEC and executedCount < totalTasks do
+            local taskItem = BudgetedTasks[CurrentBudgetTaskIndex]
+            CurrentBudgetTaskIndex = (CurrentBudgetTaskIndex % totalTasks) + 1
+            executedCount = executedCount + 1
+
+            if taskItem and taskItem.Run then
+                pcall(taskItem.Run)
+            end
+        end
+    end)
+
+    local LastStaminaCheckTime = 0
+    local STAMINA_STEP_INTERVAL = 1 / 30
+
+    local function StepDiscreteStaminaStopper()
+        local now = os.clock()
+        if now - LastStaminaCheckTime < STAMINA_STEP_INTERVAL then
+            return
+        end
+        LastStaminaCheckTime = now
+
         if not GetValue("Fun_StaminaStopper") then
             if IsSprintLocked then
                 IsSprintLocked = false
@@ -559,10 +633,10 @@ task.spawn(function()
 
         local curStamina = MainModule and typeof(MainModule.Stamina) == "number" and MainModule.Stamina
         local threshold = tonumber(GetValue("Fun_StaminaThreshold")) or 15
-        local lockDuration = tonumber(GetValue("Fun_StaminaLockDuration")) or 2.0
+        local lockDuration = math.clamp(tonumber(GetValue("Fun_StaminaLockDuration")) or 0.45, 0.1, 1.0)
 
         if IsSprintLocked then
-            if os.clock() >= StaminaLockEndTime then
+            if (curStamina and curStamina >= threshold + 5) or now >= StaminaLockEndTime then
                 IsSprintLocked = false
                 UnlockSprintInputs()
             end
@@ -577,12 +651,14 @@ task.spawn(function()
 
             if isRunning then
                 IsSprintLocked = true
-                StaminaLockEndTime = os.clock() + lockDuration
+                StaminaLockEndTime = now + lockDuration
                 TriggerSprintRelease()
                 LockSprintInputs()
             end
         end
-    end)
+    end
+
+    RegisterBudgetTask("StaminaStopper", StepDiscreteStaminaStopper)
 
     LocalPlayer.CharacterAdded:Connect(function()
         if IsSprintLocked then
@@ -771,8 +847,17 @@ task.spawn(function()
         end
     end
 
+    local ResolvedAssetCache = {}
+    local FilePathLookupCache = {}
+
     local function ResolveTrack(role, selectedTrack)
         if not selectedTrack or selectedTrack == "None" or selectedTrack == "Off" then return nil end
+
+        local cacheKey = tostring(role) .. "_" .. tostring(selectedTrack)
+        if FilePathLookupCache[cacheKey] and ResolvedAssetCache[FilePathLookupCache[cacheKey]] then
+            return ResolvedAssetCache[FilePathLookupCache[cacheKey]]
+        end
+
         local finalPath = nil
         if role == "Chase" then
             finalPath = TrackRegistry.Chase[selectedTrack] and TrackRegistry.Chase[selectedTrack].AudioPath
@@ -781,36 +866,48 @@ task.spawn(function()
         end
 
         if not finalPath then
-            ScanAllTracks()
-            if role == "Chase" then
-                finalPath = TrackRegistry.Chase[selectedTrack] and TrackRegistry.Chase[selectedTrack].AudioPath
-            else
-                finalPath = TrackRegistry[role] and TrackRegistry[role][selectedTrack]
-            end
-        end
-
-        if not finalPath and isfile then
-            local checkDirs = { SURV_DIR, KILL_DIR, LMS_DIR, CHASE_DIR, MUSIC_DIR, BASE_ROOT }
-            for _, d in ipairs(checkDirs) do
-                for _, ext in ipairs({ ".mp3", ".ogg", ".wav" }) do
-                    local directPath = d .. "/" .. selectedTrack .. ext
-                    local exists = false
-                    pcall(function() exists = isfile(directPath) or isfile(directPath:gsub("/", "\\")) end)
-                    if exists then
-                        finalPath = directPath
-                        break
+            if FilePathLookupCache[cacheKey] then
+                finalPath = FilePathLookupCache[cacheKey]
+            elseif isfile then
+                local checkDirs = { SURV_DIR, KILL_DIR, LMS_DIR, CHASE_DIR, MUSIC_DIR, BASE_ROOT }
+                for _, d in ipairs(checkDirs) do
+                    for _, ext in ipairs({ ".mp3", ".ogg", ".wav" }) do
+                        local directPath = d .. "/" .. selectedTrack .. ext
+                        local exists = false
+                        pcall(function() exists = isfile(directPath) or isfile(directPath:gsub("/", "\\")) end)
+                        if exists then
+                            finalPath = directPath
+                            break
+                        end
                     end
+                    if finalPath then break end
                 end
-                if finalPath then break end
+                if finalPath then
+                    FilePathLookupCache[cacheKey] = finalPath
+                end
             end
+        else
+            FilePathLookupCache[cacheKey] = finalPath
         end
 
-        if finalPath and (getcustomasset or getsynasset) then
+        if not finalPath then return nil end
+
+        if ResolvedAssetCache[finalPath] then
+            return ResolvedAssetCache[finalPath]
+        end
+
+        if getcustomasset or getsynasset then
             local func = getcustomasset or getsynasset
             local s, asset = pcall(func, finalPath)
-            if s and asset then return asset end
+            if s and asset then
+                ResolvedAssetCache[finalPath] = asset
+                return asset
+            end
             local s2, asset2 = pcall(func, finalPath:gsub("/", "\\"))
-            if s2 and asset2 then return asset2 end
+            if s2 and asset2 then
+                ResolvedAssetCache[finalPath] = asset2
+                return asset2
+            end
         end
         return nil
     end
@@ -1769,6 +1866,7 @@ task.spawn(function()
     end
 
     local ApplyTargetLayer = nil
+    local ResolveGameActiveLayer = nil
 
     local Chase_State = {
         VoiceA = nil,
@@ -1888,6 +1986,19 @@ task.spawn(function()
         end)
     end
 
+    local SaveDebounceThread = nil
+    local function QueueSaveTrackConfig(trackName)
+        if IsConfigLoading or AutoConfigApplying or not trackName or trackName == "None" or trackName == "Off" or trackName == "Auto" then return end
+        if SaveDebounceThread then
+            task.cancel(SaveDebounceThread)
+            SaveDebounceThread = nil
+        end
+        SaveDebounceThread = task.delay(0.35, function()
+            SaveDebounceThread = nil
+            task.spawn(SaveTrackConfig, trackName)
+        end)
+    end
+
     local function LoadTrackConfig(trackName)
         if not isfile or not readfile or not trackName or trackName == "None" or trackName == "Off" then return end
         local cfgPath = GetTrackConfigPath(trackName)
@@ -1962,30 +2073,69 @@ task.spawn(function()
         end
     end
 
+    local function UpdateLiveChaseAudio()
+        local pitch = tonumber(GetValue("Chase_PlaybackSpeed")) or 1.0
+        local baseVol = tonumber(GetValue("Chase_Volume")) or 1.0
+        local distFactor = math.clamp(1 - (Chase_State.ClosestDistance / 100), 0, 1)
+        local targetVol = baseVol * (0.8 + 0.25 * distFactor)
+
+        local function ApplyToSound(snd)
+            if snd and snd.Parent and not snd:GetAttribute("FadingOut") then
+                if math.abs(snd.PlaybackSpeed - pitch) > 0.005 then
+                    snd.PlaybackSpeed = pitch
+                end
+                snd.Volume = targetVol
+            end
+        end
+
+        ApplyToSound(Chase_State.VoiceA)
+        ApplyToSound(Chase_State.VoiceB)
+
+        for _, snd in ipairs(SoundService:GetChildren()) do
+            if snd:IsA("Sound") and snd.Name:find("Custom_Chase_Voice") then
+                ApplyToSound(snd)
+            end
+        end
+
+        local cur = Chase_State.CurrentLayer
+        local newL = (typeof(ResolveGameActiveLayer) == "function") and ResolveGameActiveLayer() or cur
+        if newL ~= cur then
+            Chase_State.LastProcessedLayer = -1
+        end
+    end
+
     local function OnChaseSettingModified()
         if IsConfigLoading or AutoConfigApplying then return end
+
+        UpdateLiveChaseAudio()
+
         local cfgTrack = GetValue("Chase_ConfigTrack")
         if not cfgTrack or cfgTrack == "None" or cfgTrack == "Off" or cfgTrack == "Auto" then
             cfgTrack = GetCurrentRoleTrack()
         end
         if cfgTrack and cfgTrack ~= "None" and cfgTrack ~= "Off" and cfgTrack ~= "Auto" then
-            SaveTrackConfig(cfgTrack)
+            QueueSaveTrackConfig(cfgTrack)
         end
     end
 
+    local LastAutoCheckTime = 0
     RunService.Heartbeat:Connect(function()
         if GetValue("Chase_ConfigTrack") ~= "Auto" then
             LastAutoConfigTrack = nil
             return
         end
 
+        if os.clock() - LastAutoCheckTime < 0.35 then return end
+        LastAutoCheckTime = os.clock()
+
         local activeTrack = GetCurrentRoleTrack()
         if activeTrack ~= LastAutoConfigTrack then
             LastAutoConfigTrack = activeTrack
             if activeTrack and activeTrack ~= "None" and activeTrack ~= "Off" then
-                AutoConfigApplying = true
-                LoadTrackConfig(activeTrack)
-                task.delay(0.15, function()
+                task.spawn(function()
+                    AutoConfigApplying = true
+                    LoadTrackConfig(activeTrack)
+                    task.wait(0.15)
                     AutoConfigApplying = false
                 end)
             end
@@ -2220,7 +2370,7 @@ task.spawn(function()
         end
     end
 
-    local function ResolveGameActiveLayer()
+    ResolveGameActiveLayer = function()
         if IsInLobby() then return 0 end
         if not CanRunChase() then return 0 end
         if IsInCutscene() then return 0 end
@@ -2501,6 +2651,11 @@ task.spawn(function()
                 local baseVol = tonumber(GetValue("Chase_Volume")) or 1.0
                 local distFactor = math.clamp(1 - (Chase_State.ClosestDistance / 100), 0, 1)
                 activeV.Volume = baseVol * (0.8 + 0.25 * distFactor)
+
+                local pitch = tonumber(GetValue("Chase_PlaybackSpeed")) or 1.0
+                if math.abs(activeV.PlaybackSpeed - pitch) > 0.01 then
+                    activeV.PlaybackSpeed = pitch
+                end
                 return
             end
         end
@@ -2690,6 +2845,9 @@ task.spawn(function()
 
     -- [ Generator ]
     local GenWorldBars = {}
+    local CachedGenerators = {}
+    local LastGenScanTime = 0
+    local LastCachedMap = nil
 
     local function ClearAllGenBars()
         for gen, data in pairs(GenWorldBars) do
@@ -2698,6 +2856,21 @@ task.spawn(function()
             end
         end
         table.clear(GenWorldBars)
+        table.clear(CachedGenerators)
+    end
+
+    local function GetActiveGenerators(activeMap)
+        if activeMap ~= LastCachedMap or os.clock() - LastGenScanTime >= 2.0 or #CachedGenerators == 0 then
+            LastCachedMap = activeMap
+            LastGenScanTime = os.clock()
+            table.clear(CachedGenerators)
+            for _, gen in ipairs(activeMap:QueryDescendants("Model#Generator:has(#Main)")) do
+                if gen:FindFirstChild("Main") then
+                    table.insert(CachedGenerators, gen)
+                end
+            end
+        end
+        return CachedGenerators
     end
 
     local function UpdateGeneratorWorldBars()
@@ -2711,7 +2884,7 @@ task.spawn(function()
             return
         end
 
-        local gens = activeMap:QueryDescendants("Model#Generator:has(#Main)")
+        local gens = GetActiveGenerators(activeMap)
         if #gens == 0 then
             ClearAllGenBars()
             return
@@ -2730,7 +2903,7 @@ task.spawn(function()
 
         for _, gen in ipairs(gens) do
             local main = gen:FindFirstChild("Main")
-            if main then
+            if main and gen.Parent then
                 currentGens[gen] = true
 
                 local barUi = gen:FindFirstChild("BarUI", true)
@@ -2773,6 +2946,10 @@ task.spawn(function()
 
                 local data = GenWorldBars[gen]
                 if not data or not data.Gui or not data.Gui.Parent then
+                    for _, old in ipairs(main:GetChildren()) do
+                        if old.Name == "FPlus_GenWorldBar" then old:Destroy() end
+                    end
+
                     local bGui = Instance.new("BillboardGui")
                     bGui.Name = "FPlus_GenWorldBar"
                     bGui.AlwaysOnTop = true
@@ -2780,7 +2957,6 @@ task.spawn(function()
                     bGui.ClipsDescendants = false
                     bGui.MaxDistance = 1200
                     bGui.Adornee = main
-
                     bGui.Size = UDim2.new(1.8, 30, 0.45, 8)
 
                     local bg = Instance.new("Frame")
@@ -2788,7 +2964,7 @@ task.spawn(function()
                     bg.BorderSizePixel = 1
                     bg.BorderColor3 = Color3.fromRGB(0, 0, 0)
                     bg.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-                    bg.BackgroundTransparency = 1
+                    bg.BackgroundTransparency = shouldBeVisible and 0.3 or 1
                     bg.Size = UDim2.fromScale(1, 1)
                     bg.Parent = bGui
 
@@ -2797,7 +2973,7 @@ task.spawn(function()
                     fill.BorderSizePixel = 0
                     fill.Size = UDim2.new(individualFillRatio, 0, 1, 0)
                     fill.BackgroundColor3 = barColor
-                    fill.BackgroundTransparency = 1
+                    fill.BackgroundTransparency = shouldBeVisible and 0 or 1
                     fill.Parent = bg
 
                     local label = Instance.new("TextLabel")
@@ -2812,33 +2988,39 @@ task.spawn(function()
                     label.Font = Enum.Font.GothamBold
                     label.TextSize = 13
                     label.TextColor3 = Color3.fromRGB(255, 255, 255)
-                    label.TextStrokeTransparency = 1
+                    label.TextTransparency = shouldBeVisible and 0 or 1
+                    label.TextStrokeTransparency = shouldBeVisible and 0.35 or 1
                     label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
                     label.Text = individualCounterText
                     label.ZIndex = 5
                     label.Parent = bg
 
+                    bGui.Enabled = shouldBeVisible
                     bGui.Parent = main
                     data = {
                         Gui = bGui,
                         Bg = bg,
                         Fill = fill,
                         Label = label,
-                        IsVisible = false
+                        IsVisible = shouldBeVisible
                     }
                     GenWorldBars[gen] = data
                 end
 
-                data.Gui.StudsOffset = Vector3.new(0, offsetY, 0)
-
-                data.Label.Position = UDim2.fromScale(0.5, 0.5)
-                data.Label.Text = individualCounterText
-
-                data.Fill.BackgroundColor3 = barColor
+                if data.Gui.StudsOffset.Y ~= offsetY then
+                    data.Gui.StudsOffset = Vector3.new(0, offsetY, 0)
+                end
+                if data.Label.Text ~= individualCounterText then
+                    data.Label.Text = individualCounterText
+                end
+                if data.Fill.BackgroundColor3 ~= barColor then
+                    data.Fill.BackgroundColor3 = barColor
+                end
                 data.Fill.Size = UDim2.new(individualFillRatio, 0, 1, 0)
 
-                -- Direct hardware visibility switch to prevent stuck 5/5 text labels
-                data.Gui.Enabled = shouldBeVisible
+                if data.Gui.Enabled ~= shouldBeVisible then
+                    data.Gui.Enabled = shouldBeVisible
+                end
 
                 if shouldBeVisible then
                     if not data.IsVisible then
@@ -2856,7 +3038,6 @@ task.spawn(function()
                         data.Label.TextTransparency = 1
                         data.Label.TextStrokeTransparency = 1
                     end
-                    -- If finished and auto-hide requested, cleanly destroy the instance
                     if isFinishedHide and data.Gui and data.Gui.Parent then
                         data.Gui:Destroy()
                         GenWorldBars[gen] = nil
@@ -2875,7 +3056,7 @@ task.spawn(function()
         end
     end
 
-    RunService.Heartbeat:Connect(UpdateGeneratorWorldBars)
+    RegisterBudgetTask("Generators", UpdateGeneratorWorldBars)
 
     if ColorPresets then
         ColorPresets["Pink-Purple"] = Color3.fromRGB(235, 140, 255)
@@ -3000,7 +3181,7 @@ task.spawn(function()
         end
     end
 
-    RunService.Heartbeat:Connect(UpdateVeeGraffitiESP)
+    RegisterBudgetTask("VeeGraffiti", UpdateVeeGraffitiESP)
 
     -- [ UI Package Definition ]
     local AddonsPackage = {
@@ -3107,8 +3288,8 @@ task.spawn(function()
                     end
                 end,
                 ["CustomSetup"] = function(self)
-                    RunService.Heartbeat:Connect(CheckTrueLMS)
-                    RunService.Heartbeat:Connect(SyncChaseAudio)
+                    RegisterBudgetTask("LMS", CheckTrueLMS)
+                    RegisterBudgetTask("Chase", SyncChaseAudio)
                 end
             },
             ["LMS_Volume"] = {
@@ -3118,7 +3299,13 @@ task.spawn(function()
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 1.0,
-                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 4.0, ["Step"] = 0.1 }
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 4.0, ["Step"] = 0.1 },
+                ["ScriptFunction"] = function(self, val)
+                    local vol = tonumber(val) or 1.0
+                    if LMS_State.CurrentSound and LMS_State.CurrentSound.Parent then
+                        LMS_State.CurrentSound.Volume = vol
+                    end
+                end
             },
             ["LMS_Loop"] = {
                 ["DisplayDescription"] = "Loop music playback",
@@ -3213,6 +3400,19 @@ task.spawn(function()
                 ["InstanceType"] = "StringValue",
                 ["DefaultInstanceValue"] = "None",
                 ["ExtraData"] = { ["Options"] = initKill },
+                ["ScriptFunction"] = function(self, val)
+                    if LMS_State.LMSActive then
+                        CheckTrueLMS()
+                    end
+                end
+            },
+            ["TwoVThree_TrustedDuelList"] = {
+                ["DisplayDescription"] = "Comma-separated usernames. If both killers in match match this list, 1vs1 LMS duel rules are forced instead of 2vs3.",
+                ["DisplayTitle"] = "Duel Killer Whitelist",
+                ["LayoutOrder"] = 3,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "r3cup,doomsense",
                 ["ScriptFunction"] = function(self, val)
                     if LMS_State.LMSActive then
                         CheckTrueLMS()
