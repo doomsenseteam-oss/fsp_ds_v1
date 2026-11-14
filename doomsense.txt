@@ -227,26 +227,42 @@ task.spawn(function()
         return false
     end
 
-    local TrustedDuelKillers = {
-        ["r3cup"] = true,
-        ["doomsense"] = true,
-    }
+    local RoundKillersBuffer = {}
+    local InitialRoundKillersCount = 0
+    local RoundModeLocked = false
 
-    local function IsKillerInDuelWhitelist(name)
-        if not name or name == "" then return false end
-        local low = name:lower()
-        if TrustedDuelKillers[name] or TrustedDuelKillers[low] then
-            return true
+    local function UpdateRoundKillersBuffer()
+        if IsInLobby() or IsRoundOver() then
+            if #RoundKillersBuffer > 0 or InitialRoundKillersCount > 0 then
+                table.clear(RoundKillersBuffer)
+                InitialRoundKillersCount = 0
+                RoundModeLocked = false
+            end
+            return
         end
-        local listStr = GetValue("TwoVThree_TrustedDuelList")
-        if listStr and listStr ~= "" then
-            for item in listStr:gmatch("[^,;%s]+") do
-                if item:lower() == low then
-                    return true
+
+        local killFolder = workspace.Players:FindFirstChild("Killers")
+        if not killFolder then return end
+
+        if not RoundModeLocked then
+            for _, k in ipairs(killFolder:GetChildren()) do
+                if k:IsA("Model") then
+                    local p = Players:GetPlayerFromCharacter(k)
+                    local rawName = p and p.Name or k:GetAttribute("Username") or k.Name
+                    if rawName and rawName ~= "" and not table.find(RoundKillersBuffer, rawName) then
+                        table.insert(RoundKillersBuffer, rawName)
+                    end
                 end
             end
+
+            InitialRoundKillersCount = math.max(InitialRoundKillersCount, #RoundKillersBuffer)
+
+            local rTimer = ReplicatedStorage:FindFirstChild("RoundTimer")
+            local isRoundRunning = rTimer and tostring(rTimer.Value) == "Round ends in:"
+            if (isRoundRunning or (os.clock() - RoundSpawnTime >= 2.5)) and InitialRoundKillersCount > 0 then
+                RoundModeLocked = true
+            end
         end
-        return false
     end
 
     local function GetMatchEntitiesCount()
@@ -255,7 +271,6 @@ task.spawn(function()
         local specFolder = workspace.Players:FindFirstChild("Spectating")
 
         local activeKillers = 0
-        local trustedKillersCount = 0
 
         if killFolder then
             for _, k in ipairs(killFolder:GetChildren()) do
@@ -264,11 +279,6 @@ task.spawn(function()
                     local inSpec = specFolder and k:IsDescendantOf(specFolder)
                     if (not h or h.Health > 0) and not inSpec then
                         activeKillers = activeKillers + 1
-                        local p = Players:GetPlayerFromCharacter(k)
-                        local rawName = p and p.Name or k:GetAttribute("Username") or k.Name
-                        if IsKillerInDuelWhitelist(rawName) then
-                            trustedKillersCount = trustedKillersCount + 1
-                        end
                     end
                 end
             end
@@ -290,15 +300,16 @@ task.spawn(function()
             end
         end
 
-        return activeKillers, activeSurvivors, totalSurvivors, trustedKillersCount
+        return activeKillers, activeSurvivors, totalSurvivors
     end
 
     local function IsTwoKillersMode()
-        local activeKillers, _, _, trustedKillersCount = GetMatchEntitiesCount()
-        if activeKillers == 2 and trustedKillersCount >= 2 then
-            return false
+        local count = InitialRoundKillersCount
+        if count < 2 and not RoundModeLocked then
+            local liveKillers = GetMatchEntitiesCount()
+            count = math.max(count, liveKillers)
         end
-        return activeKillers >= 2
+        return count >= 2
     end
 
     local function IsLocalKiller()
@@ -1692,7 +1703,7 @@ task.spawn(function()
         end
 
         local activeKillers, activeSurvivors, totalSurvivors = GetMatchEntitiesCount()
-        local is2v3Mode = (activeKillers >= 2)
+        local is2v3Mode = IsTwoKillersMode()
 
         local ingameMap = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Ingame") and workspace.Map.Ingame:FindFirstChild("Map")
         local rTimer = ReplicatedStorage:FindFirstChild("RoundTimer")
@@ -2120,6 +2131,8 @@ task.spawn(function()
 
     local LastAutoCheckTime = 0
     RunService.Heartbeat:Connect(function()
+        UpdateRoundKillersBuffer()
+
         if GetValue("Chase_ConfigTrack") ~= "Auto" then
             LastAutoConfigTrack = nil
             return
@@ -3400,19 +3413,6 @@ task.spawn(function()
                 ["InstanceType"] = "StringValue",
                 ["DefaultInstanceValue"] = "None",
                 ["ExtraData"] = { ["Options"] = initKill },
-                ["ScriptFunction"] = function(self, val)
-                    if LMS_State.LMSActive then
-                        CheckTrueLMS()
-                    end
-                end
-            },
-            ["TwoVThree_TrustedDuelList"] = {
-                ["DisplayDescription"] = "Comma-separated usernames. If both killers in match match this list, 1vs1 LMS duel rules are forced instead of 2vs3.",
-                ["DisplayTitle"] = "Duel Killer Whitelist",
-                ["LayoutOrder"] = 3,
-                ["Savable"] = true,
-                ["InstanceType"] = "StringValue",
-                ["DefaultInstanceValue"] = "r3cup,doomsense",
                 ["ScriptFunction"] = function(self, val)
                     if LMS_State.LMSActive then
                         CheckTrueLMS()
