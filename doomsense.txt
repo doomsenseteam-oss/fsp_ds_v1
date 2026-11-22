@@ -1,4 +1,4 @@
--- by r3cup, doomsense  v1.2.1
+-- by r3cup, doomsense  v1.3
 
 task.spawn(function()
     _G.ForsakenPlus_CustomRailLoaded = true
@@ -56,10 +56,17 @@ task.spawn(function()
     Chase_MuteBus.Volume = 1
     Chase_MuteBus.Parent = SoundService
 
+    local Ambient_MuteBus = Instance.new("SoundGroup")
+    Ambient_MuteBus.Name = "FPlus_Ambient_MuteBus"
+    Ambient_MuteBus.Volume = 1
+    Ambient_MuteBus.Parent = SoundService
+
     local SuppressedLMS = {}
     local SuppressedChase = {}
+    local SuppressedAmbient = {}
     local LMS_MuteTween = nil
     local Chase_MuteTween = nil
+    local Ambient_MuteTween = nil
 
     local function FadeLMSMuteBus(targetVol, duration)
         if LMS_MuteTween then LMS_MuteTween:Cancel(); LMS_MuteTween = nil end
@@ -68,19 +75,103 @@ task.spawn(function()
         LMS_MuteTween:Play()
     end
 
+    local Chase_MuteTarget = 1
+    local Chase_RestoreToken = 0
+    local Chase_IsRestoring = false
+
+    local Ambient_MuteTarget = 1
+    local Ambient_RestoreToken = 0
+    local Ambient_IsRestoring = false
+
     local function FadeChaseMuteBus(targetVol, duration)
+        if targetVol == 0 then
+            Chase_IsRestoring = false
+        end
+        if Chase_MuteTarget == targetVol and (Chase_MuteTween ~= nil or math.abs(Chase_MuteBus.Volume - targetVol) <= 0.005) then
+            return
+        end
+        Chase_MuteTarget = targetVol
         if Chase_MuteTween then Chase_MuteTween:Cancel(); Chase_MuteTween = nil end
         local dur = duration or 0
         if dur <= 0.05 then
             Chase_MuteBus.Volume = targetVol
             return
         end
-        Chase_MuteTween = TweenService:Create(Chase_MuteBus, TweenInfo.new(dur, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = targetVol })
-        Chase_MuteTween:Play()
+        local tw = TweenService:Create(Chase_MuteBus, TweenInfo.new(dur, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = targetVol })
+        Chase_MuteTween = tw
+        tw.Completed:Once(function()
+            if Chase_MuteTween == tw then
+                Chase_MuteTween = nil
+            end
+        end)
+        tw:Play()
+    end
+
+    local function FadeAmbientMuteBus(targetVol, duration)
+        if targetVol == 0 then
+            Ambient_IsRestoring = false
+        end
+        if Ambient_MuteTarget == targetVol and (Ambient_MuteTween ~= nil or math.abs(Ambient_MuteBus.Volume - targetVol) <= 0.005) then
+            return
+        end
+        Ambient_MuteTarget = targetVol
+        if Ambient_MuteTween then Ambient_MuteTween:Cancel(); Ambient_MuteTween = nil end
+        local dur = duration or 0
+        if dur <= 0.05 then
+            Ambient_MuteBus.Volume = targetVol
+            return
+        end
+        local tw = TweenService:Create(Ambient_MuteBus, TweenInfo.new(dur, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = targetVol })
+        Ambient_MuteTween = tw
+        tw.Completed:Once(function()
+            if Ambient_MuteTween == tw then
+                Ambient_MuteTween = nil
+            end
+        end)
+        tw:Play()
+    end
+
+    local Match_State = {
+        TwoVThreeIds = {
+            ["140590618095161"] = true,
+            ["102302552583909"] = true,
+            ["87155473504196"] = true,
+        },
+        NativeLmsIds = {
+            ["115884097233860"] = true,
+            ["118313522837321"] = true,
+            ["80564889711353"] = true,
+            ["88279626466849"] = true,
+            ["116163840392152"] = true,
+            ["88144925479265"] = true,
+            ["128206924329556"] = true,
+        },
+        KillersBuffer = {},
+        InitialKillers = 0,
+        ModeLocked = false,
+        Confirmed2v3 = false,
+        Is2v3Active = false,
+        IsLMSActive = false,
+        IsFinaleActive = false,
+        IsNativeLMS = false,
+        IsNative2v3 = false,
+        NativeSounds = {},
+        ActiveKillers = 0,
+        ActiveSurvivors = 0,
+        TotalSurvivors = 0,
+    }
+
+    function Match_State.Is2v3TrackSound(snd)
+        if not snd or not snd:IsA("Sound") or snd.Name:find("Custom_") then return false end
+        local sId = tostring(snd.SoundId or ""):match("%d+")
+        return sId ~= nil and Match_State.TwoVThreeIds[sId] == true
     end
 
     local function IsLMSSound(snd)
         if not snd or not snd:IsA("Sound") or snd.Name:find("Custom_") then return false end
+        if Match_State.Is2v3TrackSound(snd) then return true end
+        local sId = tostring(snd.SoundId or ""):match("%d+")
+        if sId and Match_State.NativeLmsIds[sId] then return true end
         local n = snd.Name:lower()
         return (n == "lastsurvivor") or (n:find("lastsurvivor") ~= nil) or (n:find("lms") ~= nil)
     end
@@ -94,6 +185,9 @@ task.spawn(function()
             if snd.SoundGroup ~= LMS_MuteBus then snd.SoundGroup = LMS_MuteBus end
         end
     end
+
+    local LMS_State
+    local Chase_State
 
     local function RestoreNativeLMS(duration)
         local fadeDur = duration or 0.5
@@ -117,22 +211,36 @@ task.spawn(function()
         if not SuppressedChase[snd] then
             SuppressedChase[snd] = { OriginalGroup = snd.SoundGroup }
             snd.SoundGroup = Chase_MuteBus
-        else
-            if snd.SoundGroup ~= Chase_MuteBus then snd.SoundGroup = Chase_MuteBus end
+        elseif snd.SoundGroup ~= Chase_MuteBus then
+            SuppressedChase[snd].OriginalGroup = snd.SoundGroup
+            snd.SoundGroup = Chase_MuteBus
         end
     end
 
+    local IsNativeTerrorSound = nil
+    local ShouldKeepNativeChaseMuted = nil
+    local IsExtraneousAmbientSound = nil
+    local IsCustomChaseBlockingAmbient = nil
+    local SuppressAmbientAudio = nil
+    local RestoreAmbientAudio = nil
+
     local function RestoreNativeChase(duration)
         local char = LocalPlayer.Character
-        if char then
+        if char and char:GetAttribute("MuteChaseThemes") ~= nil then
             char:SetAttribute("MuteChaseThemes", nil)
         end
 
         local fadeDur = duration or (tonumber(GetValue("Chase_FadeTime")) or 0.6)
+        if Chase_IsRestoring and fadeDur > 0.05 then return end
+        Chase_RestoreToken = Chase_RestoreToken + 1
+        local myToken = Chase_RestoreToken
+
         FadeChaseMuteBus(1, fadeDur)
 
-        task.delay(fadeDur + 0.05, function()
-            if not (Chase_State and Chase_State.ThemesSilenced) then
+        local function FinishRestore()
+            if Chase_RestoreToken ~= myToken then return end
+            Chase_IsRestoring = false
+            if not (Chase_State and Chase_State.ThemesSilenced) and not (typeof(ShouldKeepNativeChaseMuted) == "function" and ShouldKeepNativeChaseMuted()) then
                 for snd, data in pairs(SuppressedChase) do
                     if snd and snd.Parent then
                         pcall(function() snd.SoundGroup = data.OriginalGroup end)
@@ -140,7 +248,14 @@ task.spawn(function()
                 end
                 table.clear(SuppressedChase)
             end
-        end)
+        end
+
+        if fadeDur <= 0.05 then
+            FinishRestore()
+        else
+            Chase_IsRestoring = true
+            task.delay(fadeDur + 0.05, FinishRestore)
+        end
     end
 
     local function IsSpectating()
@@ -227,16 +342,14 @@ task.spawn(function()
         return false
     end
 
-    local RoundKillersBuffer = {}
-    local InitialRoundKillersCount = 0
-    local RoundModeLocked = false
+    local RoundSpawnTime = 0
 
-    local function UpdateRoundKillersBuffer()
+    function Match_State.UpdateKillers()
         if IsInLobby() or IsRoundOver() then
-            if #RoundKillersBuffer > 0 or InitialRoundKillersCount > 0 then
-                table.clear(RoundKillersBuffer)
-                InitialRoundKillersCount = 0
-                RoundModeLocked = false
+            if #Match_State.KillersBuffer > 0 or Match_State.InitialKillers > 0 then
+                table.clear(Match_State.KillersBuffer)
+                Match_State.InitialKillers = 0
+                Match_State.ModeLocked = false
             end
             return
         end
@@ -244,23 +357,23 @@ task.spawn(function()
         local killFolder = workspace.Players:FindFirstChild("Killers")
         if not killFolder then return end
 
-        if not RoundModeLocked then
+        if not Match_State.ModeLocked or Match_State.InitialKillers < 2 then
             for _, k in ipairs(killFolder:GetChildren()) do
                 if k:IsA("Model") then
                     local p = Players:GetPlayerFromCharacter(k)
-                    local rawName = p and p.Name or k:GetAttribute("Username") or k.Name
-                    if rawName and rawName ~= "" and not table.find(RoundKillersBuffer, rawName) then
-                        table.insert(RoundKillersBuffer, rawName)
+                    if p or not k.Name:lower():find("noli") then
+                        local rawName = p and p.Name or k:GetAttribute("Username") or k.Name
+                        if rawName and rawName ~= "" and not table.find(Match_State.KillersBuffer, rawName) then
+                            table.insert(Match_State.KillersBuffer, rawName)
+                        end
                     end
                 end
             end
 
-            InitialRoundKillersCount = math.max(InitialRoundKillersCount, #RoundKillersBuffer)
+            Match_State.InitialKillers = math.max(Match_State.InitialKillers, #Match_State.KillersBuffer)
 
-            local rTimer = ReplicatedStorage:FindFirstChild("RoundTimer")
-            local isRoundRunning = rTimer and tostring(rTimer.Value) == "Round ends in:"
-            if (isRoundRunning or (os.clock() - RoundSpawnTime >= 2.5)) and InitialRoundKillersCount > 0 then
-                RoundModeLocked = true
+            if (os.clock() - RoundSpawnTime >= 5.0) and Match_State.InitialKillers > 0 then
+                Match_State.ModeLocked = true
             end
         end
     end
@@ -275,10 +388,13 @@ task.spawn(function()
         if killFolder then
             for _, k in ipairs(killFolder:GetChildren()) do
                 if k:IsA("Model") and k:GetAttribute("Dead") ~= true then
-                    local h = k:FindFirstChildOfClass("Humanoid")
-                    local inSpec = specFolder and k:IsDescendantOf(specFolder)
-                    if (not h or h.Health > 0) and not inSpec then
-                        activeKillers = activeKillers + 1
+                    local p = Players:GetPlayerFromCharacter(k)
+                    if p or not k.Name:lower():find("noli") then
+                        local h = k:FindFirstChildOfClass("Humanoid")
+                        local inSpec = specFolder and k:IsDescendantOf(specFolder)
+                        if (not h or h.Health > 0) and not inSpec then
+                            activeKillers = activeKillers + 1
+                        end
                     end
                 end
             end
@@ -304,12 +420,96 @@ task.spawn(function()
     end
 
     local function IsTwoKillersMode()
-        local count = InitialRoundKillersCount
-        if count < 2 and not RoundModeLocked then
+        local count = Match_State.InitialKillers
+        if count < 2 and not Match_State.ModeLocked then
             local liveKillers = GetMatchEntitiesCount()
             count = math.max(count, liveKillers)
         end
         return count >= 2
+    end
+
+    function Match_State.Update()
+        Match_State.UpdateKillers()
+
+        if IsInLobby() or IsRoundOver() then
+            Match_State.Confirmed2v3 = false
+            Match_State.Is2v3Active = false
+            Match_State.IsLMSActive = false
+            Match_State.IsFinaleActive = false
+            Match_State.IsNativeLMS = false
+            Match_State.IsNative2v3 = false
+            table.clear(Match_State.NativeSounds)
+            return Match_State
+        end
+
+        local activeKillers, activeSurvivors, totalSurvivors = GetMatchEntitiesCount()
+        local themes = workspace:FindFirstChild("Themes")
+        local isNativeLMS = false
+        local isNative2v3 = false
+        local activeNativeSounds = {}
+
+        if themes then
+            for _, snd in ipairs(themes:GetChildren()) do
+                if snd:IsA("Sound") then
+                    local is2v3Snd = Match_State.Is2v3TrackSound(snd)
+                    local isLmsSnd = is2v3Snd or IsLMSSound(snd)
+                    if isLmsSnd then
+                        table.insert(activeNativeSounds, snd)
+                        if snd.IsPlaying or snd.Playing or snd.TimePosition > 0 then
+                            isNativeLMS = true
+                            if is2v3Snd then
+                                local sId = tostring(snd.SoundId or ""):match("%d+")
+                                if sId ~= "87155473504196" or Match_State.InitialKillers <= 2 or activeSurvivors >= 2 then
+                                    isNative2v3 = true
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        local ingameMap = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Ingame") and workspace.Map.Ingame:FindFirstChild("Map")
+        local rTimer = ReplicatedStorage:FindFirstChild("RoundTimer")
+        local timeLeft = rTimer and rTimer:GetAttribute("TimeLeft")
+
+        local isMatchOngoing = ingameMap ~= nil
+            and (rTimer and tostring(rTimer.Value) == "Round ends in:")
+            and (timeLeft == nil or tonumber(timeLeft) > 0)
+            and activeKillers > 0
+
+        if isMatchOngoing and isNative2v3 then
+            Match_State.Confirmed2v3 = true
+        end
+
+        local is2v3Active = false
+        local isLMSActive = false
+
+        if isMatchOngoing then
+            if Match_State.Confirmed2v3 then
+                if (activeSurvivors >= 1 and activeSurvivors <= 3) or isNative2v3 or isNativeLMS then
+                    is2v3Active = true
+                    isLMSActive = true
+                end
+            else
+                local isRegularNativeLMS = isNativeLMS and not isNative2v3
+                if isRegularNativeLMS or (activeSurvivors == 1 and totalSurvivors >= 1) then
+                    isLMSActive = true
+                end
+            end
+        end
+
+        Match_State.ActiveKillers = activeKillers
+        Match_State.ActiveSurvivors = activeSurvivors
+        Match_State.TotalSurvivors = totalSurvivors
+        Match_State.IsNativeLMS = isNativeLMS
+        Match_State.IsNative2v3 = isNative2v3
+        Match_State.NativeSounds = activeNativeSounds
+        Match_State.Is2v3Active = is2v3Active
+        Match_State.IsLMSActive = isLMSActive
+        Match_State.IsFinaleActive = is2v3Active or isLMSActive or isNative2v3 or isNativeLMS
+
+        return Match_State
     end
 
     local function IsLocalKiller()
@@ -327,7 +527,19 @@ task.spawn(function()
         if IsLocalKiller() then return true end
         if GetValue("Chase_SurvivorMode") == true then
             local killFolder = workspace.Players:FindFirstChild("Killers")
-            if killFolder and #killFolder:GetChildren() > 0 then
+            if not killFolder or #killFolder:GetChildren() == 0 then
+                return false
+            end
+            if IsSpectating() then
+                return true
+            end
+            local char = LocalPlayer.Character
+            local survFolder = workspace.Players:FindFirstChild("Survivors")
+            local specFolder = workspace.Players:FindFirstChild("Spectating")
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local isAlive = char and char:GetAttribute("Dead") ~= true and (not hum or hum.Health > 0)
+            if isAlive and not (specFolder and char:IsDescendantOf(specFolder))
+                and ((survFolder and char:IsDescendantOf(survFolder)) or (MainUI and MainUI:FindFirstChild("AbilityContainer"))) then
                 return true
             end
         end
@@ -350,20 +562,95 @@ task.spawn(function()
             if not child:IsA("Sound") or IsSoundProtected(child) then return end
             local inLobby = IsInLobby()
 
+            if Match_State.Is2v3TrackSound(child) and not inLobby and not IsRoundOver() then
+                local sId = tostring(child.SoundId or ""):match("%d+")
+                if sId ~= "87155473504196" or Match_State.InitialKillers <= 2 or (Match_State.ActiveSurvivors or 0) >= 2 then
+                    Match_State.Confirmed2v3 = true
+                    Match_State.Is2v3Active = true
+                    Match_State.IsLMSActive = true
+                    Match_State.IsFinaleActive = true
+                end
+            end
+
             if IsLMSSound(child) then
-                local isLMSOn = (not inLobby or GetValue("LMS_LobbyAudio") == true) 
-                    and (LMS_State and LMS_State.LMSActive) 
-                    and (GetValue("LMS_SurvTrack") ~= "Off" or GetValue("LMS_KillerTrack") ~= "Off")
+                local is2v3Snd = Match_State.Is2v3TrackSound(child) or (Match_State and Match_State.Confirmed2v3)
+                local roleTrack
+                if is2v3Snd then
+                    roleTrack = IsLocalKiller() and GetValue("TwoVThree_KillerTrack") or GetValue("TwoVThree_SurvTrack")
+                else
+                    roleTrack = IsLocalKiller() and GetValue("LMS_KillerTrack") or GetValue("LMS_SurvTrack")
+                end
+                if roleTrack == "None" then
+                    roleTrack = IsLocalKiller() and GetValue("LMS_KillerTrack") or GetValue("LMS_SurvTrack")
+                end
+
+                local myChar = LocalPlayer.Character
+                local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+                local survFolder = workspace.Players:FindFirstChild("Survivors")
+                local isAliveParticipant = myChar and myChar:GetAttribute("Dead") ~= true and myHum and myHum.Health > 0
+                    and (IsLocalKiller() or (survFolder and myChar:IsDescendantOf(survFolder)))
+
+                local isLMSOn = (isAliveParticipant or GetValue("LMS_LobbyAudio") == true)
+                    and (not inLobby or GetValue("LMS_LobbyAudio") == true)
+                    and GetValue("LMS_Active") == true
+                    and roleTrack ~= "Off"
                 if isLMSOn then
                     SuppressLMSAudio(child)
                     FadeLMSMuteBus(0, 0.2)
                 end
             else
-                local isChaseOn = not inLobby and CanRunChase() and (Chase_State and (Chase_State.CurrentLayer > 0 or Chase_State.ThemesSilenced))
+                local isChaseOn = not inLobby and not (Match_State and Match_State.IsFinaleActive) and CanRunChase()
+                    and typeof(IsNativeTerrorSound) == "function" and IsNativeTerrorSound(child)
+                    and (
+                        (Chase_State and (Chase_State.CurrentLayer > 0 or Chase_State.ThemesSilenced))
+                        or (typeof(ShouldKeepNativeChaseMuted) == "function" and ShouldKeepNativeChaseMuted())
+                    )
+                local isAmbientBlocked = typeof(IsExtraneousAmbientSound) == "function" and IsExtraneousAmbientSound(child)
+                    and typeof(IsCustomChaseBlockingAmbient) == "function" and IsCustomChaseBlockingAmbient()
                 if isChaseOn then
                     SuppressChaseAudio(child)
                     FadeChaseMuteBus(0, 0)
+                elseif isAmbientBlocked then
+                    SuppressAmbientAudio(child)
+                    FadeAmbientMuteBus(0, 0)
                 end
+                task.defer(function()
+                    if not child or not child.Parent then return end
+                    if typeof(IsNativeTerrorSound) == "function" and IsNativeTerrorSound(child) then
+                        local ambData = SuppressedAmbient[child]
+                        if ambData then
+                            pcall(function() child.SoundGroup = ambData.OriginalGroup end)
+                            SuppressedAmbient[child] = nil
+                        end
+                        if not IsInLobby() and not (Match_State and Match_State.IsFinaleActive) and CanRunChase()
+                            and ((Chase_State and (Chase_State.CurrentLayer > 0 or Chase_State.ThemesSilenced))
+                                or (typeof(ShouldKeepNativeChaseMuted) == "function" and ShouldKeepNativeChaseMuted())) then
+                            SuppressChaseAudio(child)
+                            FadeChaseMuteBus(0, 0)
+                        end
+                    elseif typeof(IsExtraneousAmbientSound) == "function" and IsExtraneousAmbientSound(child) then
+                        local chaseData = SuppressedChase[child]
+                        if chaseData then
+                            pcall(function() child.SoundGroup = chaseData.OriginalGroup end)
+                            SuppressedChase[child] = nil
+                        end
+                        if typeof(IsCustomChaseBlockingAmbient) == "function" and IsCustomChaseBlockingAmbient() then
+                            SuppressAmbientAudio(child)
+                            FadeAmbientMuteBus(0, 0)
+                        end
+                    else
+                        local chaseData = SuppressedChase[child]
+                        if chaseData then
+                            pcall(function() child.SoundGroup = chaseData.OriginalGroup end)
+                            SuppressedChase[child] = nil
+                        end
+                        local ambData = SuppressedAmbient[child]
+                        if ambData then
+                            pcall(function() child.SoundGroup = ambData.OriginalGroup end)
+                            SuppressedAmbient[child] = nil
+                        end
+                    end
+                end)
             end
         end)
     end
@@ -441,7 +728,155 @@ task.spawn(function()
         end
     end)
 
-    -- [ Emote Game Settings Sync ]
+    -- [ Emote Game Settings Sync & Separate FUN Config ]
+    local writeFileFn = writefile or write_file
+    local FUN_CONFIG_PATH = BASE_ROOT .. "/FunSettings.txt"
+    local FUN_SETTING_KEYS = {
+        "Fun_UnlockKillerEmotes",
+        "Fun_EmoteWalk",
+        "Fun_ParryAnimCancel",
+        "Fun_StaminaStopper",
+        "Fun_StaminaThreshold",
+        "Fun_StaminaLockDuration",
+        "Fun_HitboxDrag",
+        "Fun_HDT_Speed",
+        "Fun_HDT_StartDelay",
+        "Fun_HDT_Duration",
+        "Fun_HDT_MaxRange",
+        "Fun_EmoteCamera",
+        "Fun_EmoteVFXDisabled",
+        "Fun_EmoteSFXDisabled",
+        "Fun_EmoteHandsDisabled",
+        "Fun_PlayerEmotesAffected",
+        "Fun_EmoteSyncing"
+    }
+
+    local FunSavedCache = {}
+    local FunConfigExistsOnDisk = false
+    local FunConfigReady = false
+    local IsApplyingFunConfig = false
+    local FunSaveThread = nil
+
+    local function LoadFunSettingsData()
+        table.clear(FunSavedCache)
+        FunConfigExistsOnDisk = false
+        if not isfile or not readfile then return end
+
+        local norm = FUN_CONFIG_PATH:gsub("/", "\\")
+        local exists = false
+        pcall(function() exists = isfile(FUN_CONFIG_PATH) or isfile(norm) end)
+
+        if exists then
+            FunConfigExistsOnDisk = true
+            local raw = ""
+            pcall(function()
+                raw = readfile(isfile(FUN_CONFIG_PATH) and FUN_CONFIG_PATH or norm)
+            end)
+            local ok, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
+            if ok and type(decoded) == "table" then
+                for _, key in ipairs(FUN_SETTING_KEYS) do
+                    if decoded[key] ~= nil then
+                        FunSavedCache[key] = decoded[key]
+                    end
+                end
+            end
+        else
+            local dataPath = BASE_ROOT .. "/Data.txt"
+            local dataNorm = dataPath:gsub("/", "\\")
+            local hasOld = false
+            pcall(function() hasOld = isfile(dataPath) or isfile(dataNorm) end)
+            if hasOld then
+                local raw = ""
+                pcall(function()
+                    raw = readfile(isfile(dataPath) and dataPath or dataNorm)
+                end)
+                local ok, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
+                if ok and type(decoded) == "table" then
+                    for _, key in ipairs(FUN_SETTING_KEYS) do
+                        if decoded[key] ~= nil then
+                            FunSavedCache[key] = decoded[key]
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local function SaveFunSettingsData()
+        if IsApplyingFunConfig or not writeFileFn then return end
+        local payload = {}
+        for _, key in ipairs(FUN_SETTING_KEYS) do
+            local inst = GetValue(key, true)
+            if inst then
+                payload[key] = inst.Value
+                FunSavedCache[key] = inst.Value
+            elseif FunSavedCache[key] ~= nil then
+                payload[key] = FunSavedCache[key]
+            end
+        end
+        pcall(function()
+            writeFileFn(FUN_CONFIG_PATH, HttpService:JSONEncode(payload))
+            FunConfigExistsOnDisk = true
+        end)
+    end
+
+    local function QueueSaveFunSettings()
+        if IsApplyingFunConfig or not writeFileFn then return end
+        if FunSaveThread then
+            task.cancel(FunSaveThread)
+            FunSaveThread = nil
+        end
+        FunSaveThread = task.delay(0.2, function()
+            FunSaveThread = nil
+            SaveFunSettingsData()
+        end)
+    end
+
+    local function InitFunSettingsPersistence()
+        task.spawn(function()
+            local deadline = os.clock() + 5.0
+            for _, key in ipairs(FUN_SETTING_KEYS) do
+                while not GetValue(key, true) and os.clock() < deadline do
+                    task.wait()
+                end
+            end
+            task.wait(0.15)
+
+            IsApplyingFunConfig = true
+            for _, key in ipairs(FUN_SETTING_KEYS) do
+                local inst = GetValue(key, true)
+                if inst and FunSavedCache[key] ~= nil and inst.Value ~= FunSavedCache[key] then
+                    pcall(function()
+                        inst.Value = FunSavedCache[key]
+                    end)
+                end
+            end
+            IsApplyingFunConfig = false
+            FunConfigReady = true
+
+            if GetValue("Fun_UnlockKillerEmotes") then
+                task.spawn(ForceBuildNativeEmoteMenu)
+            end
+
+            for _, key in ipairs(FUN_SETTING_KEYS) do
+                local inst = GetValue(key, true)
+                if inst then
+                    inst:GetPropertyChangedSignal("Value"):Connect(function()
+                        if IsApplyingFunConfig then return end
+                        FunSavedCache[key] = inst.Value
+                        QueueSaveFunSettings()
+                    end)
+                end
+            end
+
+            if not FunConfigExistsOnDisk then
+                SaveFunSettingsData()
+            end
+        end)
+    end
+
+    LoadFunSettingsData()
+
     local function GetEmoteFolder()
         return PlayerData:FindFirstChild("Settings") and PlayerData.Settings:FindFirstChild("Emote")
     end
@@ -456,15 +891,40 @@ task.spawn(function()
 
     local function BindEmoteSetting(settingName, plusInstance)
         task.spawn(function()
+            while not FunConfigReady do
+                task.wait()
+            end
+
             local settingsFld = PlayerData:WaitForChild("Settings", 20)
             local emoteFld = settingsFld and settingsFld:WaitForChild("Emote", 20)
             local targetObj = emoteFld and emoteFld:WaitForChild(settingName, 20)
-            if targetObj then
+            if not targetObj then return end
+
+            local hasSavedFunValue = (FunSavedCache[plusInstance.Name] ~= nil)
+            if hasSavedFunValue then
+                if targetObj.Value ~= plusInstance.Value then
+                    targetObj.Value = plusInstance.Value
+                end
+            else
+                IsApplyingFunConfig = true
                 plusInstance.Value = targetObj.Value
-                targetObj.Changed:Connect(function(v)
-                    plusInstance.Value = v
-                end)
+                FunSavedCache[plusInstance.Name] = targetObj.Value
+                IsApplyingFunConfig = false
+                QueueSaveFunSettings()
             end
+
+            local forceUntil = os.clock() + 3.0
+            targetObj.Changed:Connect(function(v)
+                if hasSavedFunValue and os.clock() < forceUntil then
+                    if v ~= plusInstance.Value then
+                        targetObj.Value = plusInstance.Value
+                    end
+                    return
+                end
+                if plusInstance.Value ~= v then
+                    plusInstance.Value = v
+                end
+            end)
         end)
     end
 
@@ -472,21 +932,36 @@ task.spawn(function()
     local ContextActionService = game:GetService("ContextActionService")
     local VirtualInputManager = game:GetService("VirtualInputManager")
     local StaminaLockEndTime = 0
+    local StaminaUnlockCooldownUntil = 0
     local IsSprintLocked = false
+    local DidDisableNativeSprint = false
 
-    local function GetSprintKeyCodes()
-        local keys = { Enum.KeyCode.LeftShift, Enum.KeyCode.RightShift, Enum.KeyCode.ButtonL3 }
+    local function GetSprintInputs()
+        local keyCodes = { Enum.KeyCode.LeftShift, Enum.KeyCode.RightShift, Enum.KeyCode.ButtonL3 }
+        local inputTypes = {}
         local keybinds = PlayerData and PlayerData:FindFirstChild("Settings") and PlayerData.Settings:FindFirstChild("Keybinds")
         local customKey = keybinds and keybinds:FindFirstChild("Sprint") and keybinds.Sprint.Value
-        if customKey and Enum.KeyCode[customKey] then
-            table.insert(keys, Enum.KeyCode[customKey])
+
+        if typeof(customKey) == "string" and customKey ~= "" and customKey ~= "None" then
+            local okKey, keyEnum = pcall(function() return Enum.KeyCode[customKey] end)
+            if okKey and keyEnum then
+                if not table.find(keyCodes, keyEnum) then
+                    table.insert(keyCodes, keyEnum)
+                end
+            else
+                local okType, typeEnum = pcall(function() return Enum.UserInputType[customKey] end)
+                if okType and typeEnum then
+                    table.insert(inputTypes, typeEnum)
+                end
+            end
         end
-        return keys
+
+        return keyCodes, inputTypes
     end
 
     local function ReleaseSprintKeys()
-        local keys = GetSprintKeyCodes()
-        for _, k in ipairs(keys) do
+        local keyCodes = GetSprintInputs()
+        for _, k in ipairs(keyCodes) do
             pcall(function()
                 VirtualInputManager:SendKeyEvent(false, k, false, game)
             end)
@@ -547,14 +1022,39 @@ task.spawn(function()
     end
 
     local function ReleaseNativeSprint()
+        if Network and GetValue("require") then
+            local ok = pcall(function()
+                require(Network):FireConnection("DisableSprinting", "", true)
+            end)
+            if ok then
+                DidDisableNativeSprint = true
+            end
+        end
+
         if MainModule then
             pcall(function()
-                if typeof(MainModule.StopSprinting) == "function" then MainModule:StopSprinting() end
-                if typeof(MainModule.SetSprinting) == "function" then MainModule:SetSprinting(false) end
-                if typeof(MainModule.ToggleSprint) == "function" then MainModule:ToggleSprint(false) end
-                if typeof(MainModule.Stop) == "function" then MainModule:Stop() end
-                if typeof(MainModule.Sprint) == "function" then MainModule:Sprint(false) end
+                if typeof(rawget(MainModule, "Toggle")) == "function" and rawget(MainModule, "IsSprinting") == true then
+                    MainModule:Toggle()
+                end
+                MainModule.CanSprint = false
                 MainModule.IsSprinting = false
+            end)
+        end
+    end
+
+    local function RestoreNativeSprint()
+        if DidDisableNativeSprint then
+            DidDisableNativeSprint = false
+            if Network and GetValue("require") then
+                pcall(function()
+                    require(Network):FireConnection("DisableSprinting", "", false)
+                end)
+            end
+        end
+
+        if MainModule then
+            pcall(function()
+                MainModule.CanSprint = true
             end)
         end
     end
@@ -566,18 +1066,72 @@ task.spawn(function()
     end
 
     local function LockSprintInputs()
-        local keys = GetSprintKeyCodes()
-        ContextActionService:BindActionAtPriority(
-            "FPlus_StaminaStopperLock",
-            function() return Enum.ContextActionResult.Sink end,
-            false,
-            100000,
-            table.unpack(keys)
-        )
+        local keyCodes, inputTypes = GetSprintInputs()
+        local bindInputs = {}
+        for _, k in ipairs(keyCodes) do table.insert(bindInputs, k) end
+        for _, t in ipairs(inputTypes) do table.insert(bindInputs, t) end
+
+        if #bindInputs > 0 then
+            ContextActionService:BindActionAtPriority(
+                "FPlus_StaminaStopperLock",
+                function() return Enum.ContextActionResult.Sink end,
+                false,
+                100000,
+                table.unpack(bindInputs)
+            )
+        end
+        SetMobileSprintInteractable(false)
     end
 
     local function UnlockSprintInputs()
-        ContextActionService:UnbindAction("FPlus_StaminaStopperLock")
+        pcall(function()
+            ContextActionService:UnbindAction("FPlus_StaminaStopperLock")
+        end)
+        SetMobileSprintInteractable(true)
+    end
+
+    local function UnlockAllSprintLocks(skipNativeRestore)
+        IsSprintLocked = false
+        StaminaUnlockCooldownUntil = os.clock() + 0.15
+        UnlockSprintInputs()
+        if not skipNativeRestore then
+            RestoreNativeSprint()
+        else
+            DidDisableNativeSprint = false
+        end
+    end
+
+    local function TryTriggerStaminaStopper()
+        if IsSprintLocked then return end
+        if not GetValue("Fun_StaminaStopper") then return end
+
+        local now = os.clock()
+        if now < StaminaUnlockCooldownUntil then return end
+
+        local char = LocalPlayer.Character
+        if not char or char:GetAttribute("Dead") == true then return end
+
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then return end
+
+        local curStamina = MainModule and typeof(rawget(MainModule, "Stamina")) == "number" and rawget(MainModule, "Stamina")
+        if not curStamina then return end
+
+        local threshold = tonumber(GetValue("Fun_StaminaThreshold")) or 15
+        if curStamina > threshold then return end
+
+        local spd = char:FindFirstChild("SpeedMultipliers")
+        local isRunning = (MainModule and rawget(MainModule, "IsSprinting") == true)
+            or (spd and spd:FindFirstChild("Sprinting") ~= nil)
+            or (hum.MoveDirection.Magnitude > 0 and (char:GetAttribute("Sprinting") == true or char:GetAttribute("IsSprinting") == true))
+
+        if isRunning then
+            local lockDuration = math.clamp(tonumber(GetValue("Fun_StaminaLockDuration")) or 2.0, 0.1, 5.0)
+            IsSprintLocked = true
+            StaminaLockEndTime = now + lockDuration
+            TriggerSprintRelease()
+            LockSprintInputs()
+        end
     end
 
     local FRAME_BUDGET_SEC = 0.002
@@ -606,6 +1160,25 @@ task.spawn(function()
         end
     end)
 
+    local HookedStaminaSignal = nil
+    local StaminaChangedConn = nil
+
+    local function RehookStaminaChanged()
+        local sig = MainModule and rawget(MainModule, "StaminaChanged")
+        if sig and sig ~= HookedStaminaSignal and typeof(sig.Connect) == "function" then
+            if StaminaChangedConn then
+                pcall(function() StaminaChangedConn:Disconnect() end)
+                StaminaChangedConn = nil
+            end
+            HookedStaminaSignal = sig
+            StaminaChangedConn = sig:Connect(function()
+                pcall(TryTriggerStaminaStopper)
+            end)
+        end
+    end
+
+    RehookStaminaChanged()
+
     local LastStaminaCheckTime = 0
     local STAMINA_STEP_INTERVAL = 1 / 30
 
@@ -616,66 +1189,49 @@ task.spawn(function()
         end
         LastStaminaCheckTime = now
 
+        RehookStaminaChanged()
+
         if not GetValue("Fun_StaminaStopper") then
-            if IsSprintLocked then
-                IsSprintLocked = false
-                UnlockSprintInputs()
+            if IsSprintLocked or DidDisableNativeSprint then
+                UnlockAllSprintLocks()
             end
             return
         end
 
         local char = LocalPlayer.Character
         if not char or char:GetAttribute("Dead") == true then
-            if IsSprintLocked then
-                IsSprintLocked = false
-                UnlockSprintInputs()
+            if IsSprintLocked or DidDisableNativeSprint then
+                UnlockAllSprintLocks()
             end
             return
         end
 
         local hum = char:FindFirstChildOfClass("Humanoid")
         if not hum or hum.Health <= 0 then
-            if IsSprintLocked then
-                IsSprintLocked = false
-                UnlockSprintInputs()
+            if IsSprintLocked or DidDisableNativeSprint then
+                UnlockAllSprintLocks()
             end
             return
         end
-
-        local curStamina = MainModule and typeof(MainModule.Stamina) == "number" and MainModule.Stamina
-        local threshold = tonumber(GetValue("Fun_StaminaThreshold")) or 15
-        local lockDuration = math.clamp(tonumber(GetValue("Fun_StaminaLockDuration")) or 0.45, 0.1, 1.0)
 
         if IsSprintLocked then
-            if (curStamina and curStamina >= threshold + 5) or now >= StaminaLockEndTime then
-                IsSprintLocked = false
-                UnlockSprintInputs()
+            if now >= StaminaLockEndTime then
+                UnlockAllSprintLocks()
             end
             return
         end
 
-        if curStamina and curStamina <= threshold then
-            local spd = char:FindFirstChild("SpeedMultipliers")
-            local isRunning = (MainModule and MainModule.IsSprinting == true)
-                or (spd and spd:FindFirstChild("Sprinting") ~= nil)
-                or (hum.MoveDirection.Magnitude > 0 and (char:GetAttribute("Sprinting") == true or char:GetAttribute("IsSprinting") == true))
-
-            if isRunning then
-                IsSprintLocked = true
-                StaminaLockEndTime = now + lockDuration
-                TriggerSprintRelease()
-                LockSprintInputs()
-            end
-        end
+        TryTriggerStaminaStopper()
     end
 
     RegisterBudgetTask("StaminaStopper", StepDiscreteStaminaStopper)
 
     LocalPlayer.CharacterAdded:Connect(function()
-        if IsSprintLocked then
-            IsSprintLocked = false
-            UnlockSprintInputs()
+        if IsSprintLocked or DidDisableNativeSprint then
+            UnlockAllSprintLocks(true)
         end
+        StaminaUnlockCooldownUntil = 0
+        task.delay(0.2, RehookStaminaChanged)
     end)
 
     -- [ ChaseThemes Game Hook ]
@@ -726,17 +1282,28 @@ task.spawn(function()
             if exists then
                 local content = ""
                 pcall(function() content = readfile(isfile(txtPath) and txtPath or txtPath:gsub("/", "\\")) end)
+                content = content:gsub("^\239\187\191", "")
+                local function ParseSec(str)
+                    if not str then return nil end
+                    str = str:gsub(",", ".")
+                    local m, s = str:match("^(%d+):([%d%.]+)$")
+                    if m and s then
+                        local mn, sn = tonumber(m), tonumber(s)
+                        if mn and sn then return mn * 60 + sn end
+                    end
+                    return tonumber(str)
+                end
                 for line in content:gmatch("[^\r\n]+") do
-                    local key, sStart, sEnd = line:match("([%w_%-]+)%s*:%s*([%d%.]+)%s*-%s*([%d%.]+)")
+                    local key, sStart, sEnd = line:match("([%w%s_%-]+)%s*[:=]%s*([%d%.,:]+)%s*%-%s*([%d%.,:]+)")
                     if key and sStart and sEnd then
                         local k = key:lower():gsub("%s+", "")
-                        local startT, endT = tonumber(sStart), tonumber(sEnd)
+                        local startT, endT = ParseSec(sStart), ParseSec(sEnd)
                         if startT and endT and endT > startT then
-                            if k:find("lay1%-2") or k:find("lay1_2") or k:find("lay1to2") or k:find("layer1%-2") then
+                            if k:find("lay1%-2") or k:find("lay1_2") or k:find("lay1to2") or k:find("layer1%-2") or k:find("layer1_2") or k:find("layer1to2") or k:find("lay1%-lay2") or k:find("layer1%-layer2") then
                                 timings.Trans1_2 = { Start = startT, End = endT }
-                            elseif k:find("lay2%-3") or k:find("lay2_3") or k:find("lay2to3") or k:find("layer2%-3") then
+                            elseif k:find("lay2%-3") or k:find("lay2_3") or k:find("lay2to3") or k:find("layer2%-3") or k:find("layer2_3") or k:find("layer2to3") or k:find("lay2%-lay3") or k:find("layer2%-layer3") then
                                 timings.Trans2_3 = { Start = startT, End = endT }
-                            elseif k:find("lay3%-chase") or k:find("lay3_chase") or k:find("lay3tochase") or k:find("layer3%-chase") then
+                            elseif k:find("lay3%-chase") or k:find("lay3_chase") or k:find("lay3tochase") or k:find("layer3%-chase") or k:find("layer3_chase") or k:find("layer3tochase") or k:find("lay3%-lay4") or k:find("layer3%-layer4") then
                                 timings.Trans3_Chase = { Start = startT, End = endT }
                             elseif k:find("lay1") or k:find("layer1") then
                                 timings.Lay1 = { Start = startT, End = endT }
@@ -744,7 +1311,7 @@ task.spawn(function()
                                 timings.Lay2 = { Start = startT, End = endT }
                             elseif k:find("lay3") or k:find("layer3") then
                                 timings.Lay3 = { Start = startT, End = endT }
-                            elseif k:find("chase") then
+                            elseif k:find("chase") or k:find("lay4") or k:find("layer4") then
                                 timings.Chase = { Start = startT, End = endT }
                             end
                         end
@@ -1159,7 +1726,7 @@ task.spawn(function()
             end
         end
 
-        local isMode2v12 = (#killModels >= 2) or (IsTwoKillersMode and IsTwoKillersMode())
+        local isMode2v12 = (Match_State and Match_State.Confirmed2v3) or (#killModels >= 2) or (IsTwoKillersMode and IsTwoKillersMode())
         local maxSurvLimit = isMode2v12 and 3 or 1
 
         if survFolder then
@@ -1531,7 +2098,7 @@ task.spawn(function()
     end
 
     -- [ LMS Core State & Cache Retention ]
-    local LMS_State = {
+    LMS_State = {
         IsTriggered = false,
         LMSActive = false,
         VisualPlayed = false,
@@ -1687,45 +2254,11 @@ task.spawn(function()
             return
         end
 
-        local themes = workspace:FindFirstChild("Themes")
-        local isNativeLMS = false
-        local activeNativeSounds = {}
+        Match_State.Update()
 
-        if themes then
-            for _, snd in ipairs(themes:GetChildren()) do
-                if snd:IsA("Sound") and IsLMSSound(snd) then
-                    table.insert(activeNativeSounds, snd)
-                    if (snd.IsPlaying or snd.Playing or snd.TimePosition > 0) then
-                        isNativeLMS = true
-                    end
-                end
-            end
-        end
-
-        local activeKillers, activeSurvivors, totalSurvivors = GetMatchEntitiesCount()
-        local is2v3Mode = IsTwoKillersMode()
-
-        local ingameMap = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Ingame") and workspace.Map.Ingame:FindFirstChild("Map")
-        local rTimer = ReplicatedStorage:FindFirstChild("RoundTimer")
-        local timeLeft = rTimer and rTimer:GetAttribute("TimeLeft")
-
-        local isMatchOngoing = ingameMap ~= nil
-            and (rTimer and tostring(rTimer.Value) == "Round ends in:")
-            and (timeLeft == nil or tonumber(timeLeft) > 0)
-            and activeKillers > 0
-
-        local isLMS = false
-        if isMatchOngoing and not roundIsOver then
-            if is2v3Mode then
-                if isNativeLMS or (activeSurvivors <= 3 and activeSurvivors >= 1 and totalSurvivors >= 3) then
-                    isLMS = true
-                end
-            else
-                if isNativeLMS or (activeSurvivors == 1 and totalSurvivors >= 1) then
-                    isLMS = true
-                end
-            end
-        end
+        local activeNativeSounds = Match_State.NativeSounds
+        local is2v3Mode = Match_State.Confirmed2v3
+        local isLMS = Match_State.IsFinaleActive
 
         if isNonParticipant and not allowLobbyAudio then
             isLMS = false
@@ -1853,7 +2386,6 @@ task.spawn(function()
     end
 
     -- [ Custom Chase Engine ]
-    local RoundSpawnTime = 0
     local WasInLobbyState = true
     local StopChaseAudio = nil
 
@@ -1879,7 +2411,7 @@ task.spawn(function()
     local ApplyTargetLayer = nil
     local ResolveGameActiveLayer = nil
 
-    local Chase_State = {
+    Chase_State = {
         VoiceA = nil,
         VoiceB = nil,
         ActiveVoice = "A",
@@ -1944,16 +2476,121 @@ task.spawn(function()
     local LastAutoConfigTrack = nil
 
     local function GetCurrentRoleTrack()
-        local track = "None"
         if IsLocalKiller() then
-            track = GetValue("Chase_Track") or "None"
+            return GetValue("Chase_Track") or "None"
         else
-            track = GetValue("Chase_SurvTrack") or "None"
-            if track == "None" then
-                track = GetValue("Chase_Track") or "None"
+            return GetValue("Chase_SurvTrack") or "None"
+        end
+    end
+
+    IsNativeTerrorSound = function(snd)
+        if not snd or not snd:IsA("Sound") or snd.Name:find("Custom_") then return false end
+        if IsSoundProtected(snd) or IsLMSSound(snd) then return false end
+        local nLow = snd.Name:lower()
+        if nLow:find("fakelayer") then return true end
+        if nLow == "lobby" or nLow == "oldoutsidelobby" or nLow == "mapambience" or nLow == "30seconds" or nLow == "deathlobby" then return false end
+
+        local sId = tostring((snd.SoundId ~= "" and snd.SoundId) or snd.Name or ""):match("%d+")
+        if sId then
+            local mod = GetChaseModule()
+            if mod and mod.KillerThemes then
+                for _, themeMap in pairs(mod.KillerThemes) do
+                    if type(themeMap) == "table" then
+                        for _, entry in pairs(themeMap) do
+                            if type(entry) == "table" and entry.ID and tostring(entry.ID):match("%d+") == sId then
+                                return true
+                            end
+                        end
+                    end
+                end
+            end
+
+            if sId == "119534053591457" or sId == "103787320067609" or sId == "77452944283813" or sId == "125186256017278"
+                or sId == "88010225019310" or sId == "79556846831205" or sId == "71846364767798" or sId == "82229037343524" then
+                return true
             end
         end
-        return track
+
+        if snd:GetAttribute("Priority") == 5 and workspace:GetAttribute("LastSurvivorAlive") ~= true then
+            return true
+        end
+
+        return false
+    end
+
+    ShouldKeepNativeChaseMuted = function()
+        if IsInLobby() or not CanRunChase() then return false end
+        if (Match_State and Match_State.IsFinaleActive) or (LMS_State and (LMS_State.LMSActive or LMS_State.IsTriggered)) then return false end
+        local activeTrack = GetCurrentRoleTrack()
+        return activeTrack ~= nil and activeTrack ~= "Off"
+    end
+
+    local function HasActiveCustomChaseVoice()
+        if Chase_State and (Chase_State.VoiceA or Chase_State.VoiceB) then
+            return true
+        end
+        for _, snd in ipairs(SoundService:GetChildren()) do
+            if snd:IsA("Sound") and snd.Name:find("Custom_Chase_Voice") and (snd.IsPlaying or snd.Playing) then
+                return true
+            end
+        end
+        return false
+    end
+
+    IsExtraneousAmbientSound = function(snd)
+        if not snd or not snd:IsA("Sound") or snd.Name:find("Custom_") then return false end
+        if IsSoundProtected(snd) or IsLMSSound(snd) then return false end
+        if IsNativeTerrorSound(snd) then return false end
+        return true
+    end
+
+    IsCustomChaseBlockingAmbient = function()
+        if IsInLobby() or IsRoundOver() then return false end
+        if not CanRunChase() then return false end
+        if (Match_State and Match_State.IsFinaleActive) or (LMS_State and (LMS_State.LMSActive or LMS_State.IsTriggered)) then return false end
+        local activeTrack = GetCurrentRoleTrack()
+        if not activeTrack or activeTrack == "Off" or activeTrack == "None" then return false end
+        return (Chase_State and Chase_State.CurrentLayer > 0) or HasActiveCustomChaseVoice()
+    end
+
+    SuppressAmbientAudio = function(snd)
+        if not IsExtraneousAmbientSound(snd) then return end
+        if not SuppressedAmbient[snd] then
+            SuppressedAmbient[snd] = { OriginalGroup = snd.SoundGroup }
+            snd.SoundGroup = Ambient_MuteBus
+        elseif snd.SoundGroup ~= Ambient_MuteBus then
+            SuppressedAmbient[snd].OriginalGroup = snd.SoundGroup
+            snd.SoundGroup = Ambient_MuteBus
+        end
+    end
+
+    RestoreAmbientAudio = function(duration)
+        local fadeDur = duration or (tonumber(GetValue("Chase_FadeTime")) or 0.6)
+        if Ambient_IsRestoring and fadeDur > 0.05 then return end
+        Ambient_RestoreToken = Ambient_RestoreToken + 1
+        local myToken = Ambient_RestoreToken
+
+        FadeAmbientMuteBus(1, fadeDur)
+
+        local function FinishAmbientRestore()
+            if Ambient_RestoreToken ~= myToken then return end
+            Ambient_IsRestoring = false
+            if not IsCustomChaseBlockingAmbient() then
+                for snd, data in pairs(SuppressedAmbient) do
+                    if snd and snd.Parent then
+                        pcall(function() snd.SoundGroup = data.OriginalGroup end)
+                    end
+                end
+                table.clear(SuppressedAmbient)
+            end
+        end
+
+        if fadeDur <= 0.05 then
+            FinishAmbientRestore()
+        else
+            Ambient_IsRestoring = true
+            task.delay(fadeDur + 0.05, FinishAmbientRestore)
+        end
     end
 
     local function GetTrackConfigPath(trackName)
@@ -1990,6 +2627,12 @@ task.spawn(function()
             FadeOut_Lay2 = GetValue("Chase_FadeOut_Lay2") ~= false,
             FadeIn_Lay1 = GetValue("Chase_FadeIn_Lay1") ~= false,
             FadeOut_Lay1 = GetValue("Chase_FadeOut_Lay1") ~= false,
+            Trans_1_2 = GetValue("Chase_Trans_1_2") ~= false,
+            Trans_2_3 = GetValue("Chase_Trans_2_3") ~= false,
+            Trans_3_Chase = GetValue("Chase_Trans_3_Chase") ~= false,
+            Trans_SkipToChase = GetValue("Chase_Trans_SkipToChase") ~= false,
+            AutoKillerScale = GetValue("Chase_AutoKillerScale") ~= false,
+            FadeStrength = tonumber(GetValue("Chase_FadeStrength")) or 1.0,
         }
 
         pcall(function()
@@ -2032,6 +2675,12 @@ task.spawn(function()
             ApplyVal("Chase_HasLay2", timings.Lay2 ~= nil)
             ApplyVal("Chase_HasLay3", timings.Lay3 ~= nil)
             ApplyVal("Chase_HasChase", true)
+            ApplyVal("Chase_Trans_1_2", true)
+            ApplyVal("Chase_Trans_2_3", true)
+            ApplyVal("Chase_Trans_3_Chase", true)
+            ApplyVal("Chase_Trans_SkipToChase", true)
+            ApplyVal("Chase_AutoKillerScale", true)
+            ApplyVal("Chase_FadeStrength", 1.0)
             task.delay(0.1, function()
                 IsConfigLoading = false
                 SaveTrackConfig(trackName)
@@ -2056,6 +2705,7 @@ task.spawn(function()
 
             ApplyVal("Chase_Volume", data.Volume)
             ApplyVal("Chase_FadeTime", data.FadeTime)
+            if data.FadeStrength ~= nil then ApplyVal("Chase_FadeStrength", data.FadeStrength) else ApplyVal("Chase_FadeStrength", 1.0) end
             ApplyVal("Chase_StartDelay", data.StartDelay)
             ApplyVal("Chase_RangeMultiplier", data.RangeMultiplier)
             ApplyVal("Chase_OverlapBuffer", data.OverlapBuffer)
@@ -2079,6 +2729,11 @@ task.spawn(function()
             if data.FadeOut_Lay2 ~= nil then ApplyVal("Chase_FadeOut_Lay2", data.FadeOut_Lay2) else ApplyVal("Chase_FadeOut_Lay2", true) end
             if data.FadeIn_Lay1 ~= nil then ApplyVal("Chase_FadeIn_Lay1", data.FadeIn_Lay1) else ApplyVal("Chase_FadeIn_Lay1", true) end
             if data.FadeOut_Lay1 ~= nil then ApplyVal("Chase_FadeOut_Lay1", data.FadeOut_Lay1) else ApplyVal("Chase_FadeOut_Lay1", true) end
+            if data.Trans_1_2 ~= nil then ApplyVal("Chase_Trans_1_2", data.Trans_1_2) else ApplyVal("Chase_Trans_1_2", true) end
+            if data.Trans_2_3 ~= nil then ApplyVal("Chase_Trans_2_3", data.Trans_2_3) else ApplyVal("Chase_Trans_2_3", true) end
+            if data.Trans_3_Chase ~= nil then ApplyVal("Chase_Trans_3_Chase", data.Trans_3_Chase) else ApplyVal("Chase_Trans_3_Chase", true) end
+            if data.Trans_SkipToChase ~= nil then ApplyVal("Chase_Trans_SkipToChase", data.Trans_SkipToChase) else ApplyVal("Chase_Trans_SkipToChase", true) end
+            if data.AutoKillerScale ~= nil then ApplyVal("Chase_AutoKillerScale", data.AutoKillerScale) else ApplyVal("Chase_AutoKillerScale", true) end
 
             task.delay(0.1, function() IsConfigLoading = false end)
         end
@@ -2131,7 +2786,7 @@ task.spawn(function()
 
     local LastAutoCheckTime = 0
     RunService.Heartbeat:Connect(function()
-        UpdateRoundKillersBuffer()
+        Match_State.Update()
 
         if GetValue("Chase_ConfigTrack") ~= "Auto" then
             LastAutoConfigTrack = nil
@@ -2157,22 +2812,36 @@ task.spawn(function()
 
     local function SilenceThemesForCustomChase(fadeTime)
         if not CanRunChase() or IsInLobby() then return end
-        
+
         local char = LocalPlayer.Character
-        if char then
-            char:SetAttribute("MuteChaseThemes", true)
+        if char and typeof(ShouldKeepNativeChaseMuted) == "function" and ShouldKeepNativeChaseMuted() then
+            if char:GetAttribute("MuteChaseThemes") ~= true then
+                char:SetAttribute("MuteChaseThemes", true)
+            end
+        end
+
+        if Chase_IsRestoring then
+            Chase_RestoreToken = Chase_RestoreToken + 1
+            Chase_IsRestoring = false
+        end
+        if Ambient_IsRestoring then
+            Ambient_RestoreToken = Ambient_RestoreToken + 1
+            Ambient_IsRestoring = false
         end
 
         local themes = workspace:FindFirstChild("Themes")
         if themes then
             for _, snd in ipairs(themes:GetChildren()) do
-                if snd:IsA("Sound") and not IsSoundProtected(snd) and not IsLMSSound(snd) then
+                if IsNativeTerrorSound(snd) then
                     SuppressChaseAudio(snd)
+                elseif IsExtraneousAmbientSound(snd) then
+                    SuppressAmbientAudio(snd)
                 end
             end
         end
 
         FadeChaseMuteBus(0, 0)
+        FadeAmbientMuteBus(0, 0)
     end
 
     local function ShouldFadeIn(tier)
@@ -2205,8 +2874,87 @@ task.spawn(function()
         return true
     end
 
+    local function ApplyVolumeCurveFade(snd, isFadeOut, startVol, targetVol, fadeTime, onDone)
+        if not snd or not snd.Parent then return end
+        local tok = (snd:GetAttribute("FadeToken") or 0) + 1
+        snd:SetAttribute("FadeToken", tok)
+
+        local strength = math.clamp(tonumber(GetValue("Chase_FadeStrength")) or 1.0, 0.0, 3.0)
+        local dur = math.max(tonumber(fadeTime) or 0.6, 0.05)
+
+        if isFadeOut then
+            local outDur = dur * math.clamp(1.0 - (strength * 0.26), 0.18, 1.0)
+            local pOut = 1.0 + strength * 1.15
+            local t0 = os.clock()
+            snd.Volume = startVol
+            local conn
+            conn = RunService.Heartbeat:Connect(function()
+                if not snd or not snd.Parent or snd:GetAttribute("FadeToken") ~= tok then
+                    if conn then conn:Disconnect() end
+                    return
+                end
+                local u = math.clamp((os.clock() - t0) / outDur, 0, 1)
+                local k
+                if strength < 0.35 then
+                    local blend = strength / 0.35
+                    k = math.cos(u * math.pi * 0.5) * (1 - blend) + ((1 - u) ^ pOut) * blend
+                else
+                    k = (1 - u) ^ pOut
+                end
+                snd.Volume = startVol * k
+                if u >= 1 then
+                    if conn then conn:Disconnect() end
+                    snd.Volume = 0
+                    if onDone then onDone() end
+                end
+            end)
+        else
+            local inDelay = (strength > 0.5) and (dur * math.clamp((strength - 0.5) * 0.18, 0, 0.45)) or 0
+            local inDur = math.max(dur - inDelay, 0.08)
+            local pIn = (strength <= 1.0) and (1.0 + (1.0 - strength) * 0.5) or (1.0 + (strength - 1.0) * 0.85)
+            local t0 = os.clock()
+            snd.Volume = 0
+            local conn
+            conn = RunService.Heartbeat:Connect(function()
+                if not snd or not snd.Parent or snd:GetAttribute("FadeToken") ~= tok then
+                    if conn then conn:Disconnect() end
+                    return
+                end
+                local elapsed = os.clock() - t0
+                if elapsed < inDelay then
+                    snd.Volume = 0
+                    return
+                end
+                local u = math.clamp((elapsed - inDelay) / inDur, 0, 1)
+                local k
+                if strength < 0.35 then
+                    local blend = strength / 0.35
+                    k = math.sin(u * math.pi * 0.5) * (1 - blend) + (1 - ((1 - u) ^ 1.5)) * blend
+                elseif strength <= 1.0 then
+                    k = 1 - ((1 - u) ^ (1.0 + strength * 0.6))
+                else
+                    k = u ^ pIn
+                end
+                snd.Volume = targetVol * k
+                if u >= 1 then
+                    if conn then conn:Disconnect() end
+                    snd.Volume = targetVol
+                    if onDone then onDone() end
+                end
+            end)
+        end
+    end
+
     StopChaseAudio = function(instant, keepNativeMuted)
         local curTier = Chase_State.CurrentTierName
+        Chase_State.LoadToken = (Chase_State.LoadToken or 0) + 1
+        if Chase_State.LoadingVoice then
+            pcall(function()
+                Chase_State.LoadingVoice:Stop()
+                Chase_State.LoadingVoice:Destroy()
+            end)
+            Chase_State.LoadingVoice = nil
+        end
         Chase_State.CurrentLayer = 0
         Chase_State.CurrentTierName = nil
         Chase_State.IsTransitioning = false
@@ -2229,14 +2977,15 @@ task.spawn(function()
             else
                 if v:GetAttribute("FadingOut") then return end
                 v:SetAttribute("FadingOut", true)
+                v:SetAttribute("FadingIn", nil)
 
-                local tw = TweenService:Create(v, TweenInfo.new(fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = 0 })
-                tw:Play()
-                tw.Completed:Once(function()
-                    v:Stop()
-                    v:Destroy()
+                ApplyVolumeCurveFade(v, true, v.Volume, 0, fadeTime, function()
+                    if v and v.Parent then
+                        v:Stop()
+                        v:Destroy()
+                    end
                 end)
-                Debris:AddItem(v, fadeTime + 0.25)
+                Debris:AddItem(v, fadeTime + 0.35)
             end
         end
 
@@ -2250,144 +2999,233 @@ task.spawn(function()
             end
         end
 
-        if not keepNativeMuted and Chase_State.ThemesSilenced then
+        if not keepNativeMuted and (Chase_State.ThemesSilenced or next(SuppressedChase) ~= nil) then
             Chase_State.ThemesSilenced = false
             RestoreNativeChase(fadeTime)
+        end
+
+        if instant then
+            if next(SuppressedAmbient) ~= nil or Ambient_MuteBus.Volume < 1 then
+                RestoreAmbientAudio(0)
+            end
+        elseif not keepNativeMuted or not IsCustomChaseBlockingAmbient() then
+            if next(SuppressedAmbient) ~= nil or Ambient_MuteBus.Volume < 1 then
+                RestoreAmbientAudio(fadeTime)
+            end
         end
     end
 
     -- [ Dual-Voice Crossfader with Non-Overlapping Transitions ]
     local function PlayChaseSegment(assetId, tierName, segment, isTransition, nextTierName, nextSegment)
+        local prevTier = Chase_State.CurrentTierName
         Chase_State.CurrentTierName = nextTierName or tierName
+        Chase_State.LoadToken = (Chase_State.LoadToken or 0) + 1
+        local myToken = Chase_State.LoadToken
         Chase_State.IsLoading = true
         Chase_State.IsTransitioning = (isTransition == true)
+        Chase_State.ActiveAsset = assetId
 
-        local baseVol = tonumber(GetValue("Chase_Volume")) or 1.0
-        local pitch = tonumber(GetValue("Chase_PlaybackSpeed")) or 1.0
-        local fadeTime = math.clamp(tonumber(GetValue("Chase_FadeTime")) or 0.6, 0.1, 3.0)
-        local distFactor = math.clamp(1 - (Chase_State.ClosestDistance / 100), 0, 1)
-        local targetVol = baseVol * (0.8 + 0.25 * distFactor)
-
-        local currentVoice = (Chase_State.ActiveVoice == "A") and Chase_State.VoiceA or Chase_State.VoiceB
-        local targetVoiceSlot = (Chase_State.ActiveVoice == "A") and "B" or "A"
-
-        local prevSlotVoice = (targetVoiceSlot == "B") and Chase_State.VoiceB or Chase_State.VoiceA
-        if prevSlotVoice and prevSlotVoice ~= currentVoice and not prevSlotVoice:GetAttribute("FadingOut") then
-            prevSlotVoice:Stop()
-            prevSlotVoice:Destroy()
+        if Chase_State.LoadingVoice then
+            pcall(function()
+                Chase_State.LoadingVoice:Stop()
+                Chase_State.LoadingVoice:Destroy()
+            end)
+            Chase_State.LoadingVoice = nil
         end
 
         local newVoice = Instance.new("Sound")
-        newVoice.Name = "Custom_Chase_Voice_" .. targetVoiceSlot
+        newVoice.Name = "Custom_Chase_Voice_Pending"
         newVoice.SoundId = assetId
         newVoice.Volume = 0
-        newVoice.PlaybackSpeed = pitch
+        newVoice.PlaybackSpeed = tonumber(GetValue("Chase_PlaybackSpeed")) or 1.0
+        newVoice.Looped = true
         newVoice.Parent = SoundService
+        Chase_State.LoadingVoice = newVoice
 
-        if targetVoiceSlot == "B" then
-            if Chase_State.LoopConnB then Chase_State.LoopConnB:Disconnect(); Chase_State.LoopConnB = nil end
-            Chase_State.VoiceB = newVoice
-        else
-            if Chase_State.LoopConnA then Chase_State.LoopConnA:Disconnect(); Chase_State.LoopConnA = nil end
-            Chase_State.VoiceA = newVoice
-        end
+        task.spawn(function()
+            newVoice.Volume = 0
+            newVoice:Play()
 
-        local prevTier = Chase_State.CurrentTierName
-        Chase_State.ActiveVoice = targetVoiceSlot
-        Chase_State.ActiveAsset = assetId
+            local waitStart = os.clock()
+            while Chase_State.LoadToken == myToken and newVoice.Parent do
+                if newVoice.TimeLength > 0.05 then
+                    break
+                end
+                if os.clock() - waitStart >= 3.0 then
+                    break
+                end
+                task.wait()
+            end
 
-        if currentVoice and currentVoice.IsPlaying and not currentVoice:GetAttribute("FadingOut") then
-            currentVoice:SetAttribute("FadingOut", true)
-            local doFadeOut = ShouldFadeOut(prevTier)
-            if doFadeOut and fadeTime > 0.05 then
-                local fadeOut = TweenService:Create(currentVoice, TweenInfo.new(fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = 0 })
-                fadeOut:Play()
-                fadeOut.Completed:Once(function()
+            if Chase_State.LoadToken ~= myToken or not newVoice.Parent then
+                pcall(function() newVoice:Stop(); newVoice:Destroy() end)
+                if Chase_State.LoadingVoice == newVoice then Chase_State.LoadingVoice = nil end
+                return
+            end
+
+            Chase_State.IsLoading = false
+            Chase_State.LoadingVoice = nil
+
+            local totalLen = newVoice.TimeLength
+            if totalLen <= 0.05 and not newVoice.IsLoaded then
+                Chase_State.IsTransitioning = false
+                pcall(function() newVoice:Stop(); newVoice:Destroy() end)
+                return
+            end
+
+            local baseVol = tonumber(GetValue("Chase_Volume")) or 1.0
+            local pitch = tonumber(GetValue("Chase_PlaybackSpeed")) or 1.0
+            local fadeTime = math.clamp(tonumber(GetValue("Chase_FadeTime")) or 0.6, 0.1, 3.0)
+            local distFactor = math.clamp(1 - (Chase_State.ClosestDistance / 100), 0, 1)
+            local targetVol = baseVol * (0.8 + 0.25 * distFactor)
+
+            local currentVoice = (Chase_State.ActiveVoice == "A") and Chase_State.VoiceA or Chase_State.VoiceB
+            local targetVoiceSlot = (Chase_State.ActiveVoice == "A") and "B" or "A"
+
+            local prevSlotVoice = (targetVoiceSlot == "B") and Chase_State.VoiceB or Chase_State.VoiceA
+            if prevSlotVoice and prevSlotVoice ~= currentVoice and not prevSlotVoice:GetAttribute("FadingOut") then
+                pcall(function() prevSlotVoice:Stop(); prevSlotVoice:Destroy() end)
+            end
+
+            newVoice.Name = "Custom_Chase_Voice_" .. targetVoiceSlot
+            newVoice.PlaybackSpeed = pitch
+            if targetVoiceSlot == "B" then
+                if Chase_State.LoopConnB then Chase_State.LoopConnB:Disconnect(); Chase_State.LoopConnB = nil end
+                Chase_State.VoiceB = newVoice
+            else
+                if Chase_State.LoopConnA then Chase_State.LoopConnA:Disconnect(); Chase_State.LoopConnA = nil end
+                Chase_State.VoiceA = newVoice
+            end
+            Chase_State.ActiveVoice = targetVoiceSlot
+
+            if currentVoice and currentVoice.Parent and currentVoice.IsPlaying and not currentVoice:GetAttribute("FadingOut") then
+                currentVoice:SetAttribute("FadingOut", true)
+                currentVoice:SetAttribute("FadingIn", nil)
+                local doFadeOut = ShouldFadeOut(prevTier)
+                if doFadeOut and fadeTime > 0.05 then
+                    ApplyVolumeCurveFade(currentVoice, true, currentVoice.Volume, 0, fadeTime, function()
+                        if currentVoice and currentVoice.Parent then
+                            currentVoice:Stop()
+                            currentVoice:Destroy()
+                        end
+                    end)
+                    Debris:AddItem(currentVoice, fadeTime + 0.35)
+                else
                     currentVoice:Stop()
                     currentVoice:Destroy()
-                end)
-                Debris:AddItem(currentVoice, fadeTime + 0.25)
-            else
+                end
+            elseif currentVoice and currentVoice.Parent and not currentVoice:GetAttribute("FadingOut") then
                 currentVoice:Stop()
                 currentVoice:Destroy()
             end
-        end
 
-        local function SetupLoop()
-            Chase_State.IsLoading = false
-            if not newVoice or not newVoice.Parent then return end
+            local function ClampSeg(seg)
+                if not seg or not seg.Start or not seg.End or totalLen <= 0.05 then return nil end
+                if seg.Start >= totalLen - 0.1 then
+                    return { Start = 0, End = totalLen }
+                end
+                local s = math.clamp(seg.Start, 0, math.max(totalLen - 0.1, 0))
+                local e = math.clamp(seg.End, s + 0.05, totalLen)
+                return { Start = s, End = e }
+            end
 
-            if isTransition and segment and nextSegment then
-                newVoice.Looped = false
-                newVoice.TimePosition = segment.Start
+            local function GetSafeEnd(segEnd)
+                if totalLen > 0.1 and segEnd >= (totalLen - 0.06) then
+                    return totalLen - 0.08
+                end
+                return segEnd
+            end
 
-                local currentSeg = segment
-                local inTransitionPhase = true
+            local activeSeg = ClampSeg(segment)
+            local activeNextSeg = ClampSeg(nextSegment)
+            local inTransitionPhase = (isTransition == true and activeSeg ~= nil and activeNextSeg ~= nil)
 
+            if activeSeg then
+                newVoice.Looped = true
+                newVoice.TimePosition = activeSeg.Start
+                if not newVoice.IsPlaying then
+                    newVoice:Play()
+                end
+
+                local seekAt = os.clock()
+                local enteredSeg = (activeSeg.Start <= 0.2)
                 local conn
                 conn = RunService.Heartbeat:Connect(function()
-                    if not newVoice or not newVoice.Parent or not newVoice.IsPlaying then
+                    if not newVoice or not newVoice.Parent or newVoice:GetAttribute("FadingOut") then
                         if conn then conn:Disconnect() end
                         return
                     end
 
+                    if not newVoice.IsPlaying then
+                        newVoice:Play()
+                    end
+
+                    local pos = newVoice.TimePosition
+                    if not enteredSeg then
+                        if pos >= activeSeg.Start - 0.25 then
+                            enteredSeg = true
+                        elseif os.clock() - seekAt > 0.12 then
+                            newVoice.TimePosition = activeSeg.Start
+                            seekAt = os.clock()
+                            return
+                        else
+                            return
+                        end
+                    end
+
+                    local safeEnd = GetSafeEnd(activeSeg.End)
+
                     if inTransitionPhase then
-                        if newVoice.TimePosition >= currentSeg.End then
+                        if pos >= safeEnd or (activeSeg.Start > 0.3 and pos < activeSeg.Start - 0.35) then
                             inTransitionPhase = false
                             Chase_State.IsTransitioning = false
-                            currentSeg = nextSegment
-                            newVoice.TimePosition = nextSegment.Start
+                            if math.abs(activeNextSeg.Start - activeSeg.End) > 0.08 or pos < activeSeg.Start - 0.35 then
+                                local overshoot = (pos >= safeEnd) and math.clamp(pos - safeEnd, 0, 0.05) or 0
+                                local nextSafeEnd = GetSafeEnd(activeNextSeg.End)
+                                newVoice.TimePosition = (activeNextSeg.Start + overshoot < nextSafeEnd) and (activeNextSeg.Start + overshoot) or activeNextSeg.Start
+                                seekAt = os.clock()
+                                enteredSeg = (activeNextSeg.Start <= 0.2)
+                            end
+                            activeSeg = activeNextSeg
                         end
                     else
-                        if newVoice.TimePosition >= currentSeg.End then
-                            newVoice.TimePosition = currentSeg.Start
+                        if pos >= safeEnd or (activeSeg.Start > 0.3 and pos < activeSeg.Start - 0.35) then
+                            local overshoot = (pos >= safeEnd) and math.clamp(pos - safeEnd, 0, 0.05) or 0
+                            newVoice.TimePosition = (activeSeg.Start + overshoot < safeEnd) and (activeSeg.Start + overshoot) or activeSeg.Start
+                            seekAt = os.clock()
                         end
                     end
                 end)
 
                 if targetVoiceSlot == "B" then Chase_State.LoopConnB = conn else Chase_State.LoopConnA = conn end
-            elseif segment and segment.Start and segment.End then
-                newVoice.Looped = false
-                newVoice.TimePosition = segment.Start
-                local conn
-                conn = RunService.Heartbeat:Connect(function()
-                    if newVoice and newVoice.IsPlaying then
-                        if newVoice.TimePosition >= segment.End then
-                            newVoice.TimePosition = segment.Start
-                        end
-                    else
-                        if conn then conn:Disconnect() end
-                    end
-                end)
-                if targetVoiceSlot == "B" then Chase_State.LoopConnB = conn else Chase_State.LoopConnA = conn end
             else
+                Chase_State.IsTransitioning = false
                 newVoice.Looped = true
+                newVoice.TimePosition = 0
+                if not newVoice.IsPlaying then
+                    newVoice:Play()
+                end
             end
 
             local doFadeIn = ShouldFadeIn(tierName)
             if doFadeIn and fadeTime > 0.05 then
-                newVoice.Volume = 0
-                newVoice:Play()
-                local fadeIn = TweenService:Create(newVoice, TweenInfo.new(fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = targetVol })
-                fadeIn:Play()
+                newVoice:SetAttribute("FadingIn", true)
+                ApplyVolumeCurveFade(newVoice, false, 0, targetVol, fadeTime, function()
+                    if newVoice and newVoice.Parent then
+                        newVoice:SetAttribute("FadingIn", nil)
+                    end
+                end)
             else
                 newVoice.Volume = targetVol
-                newVoice:Play()
             end
-        end
-
-        if not newVoice.IsLoaded then
-            newVoice.Loaded:Once(SetupLoop)
-        else
-            SetupLoop()
-        end
+        end)
     end
 
     ResolveGameActiveLayer = function()
         if IsInLobby() then return 0 end
         if not CanRunChase() then return 0 end
         if IsInCutscene() then return 0 end
-        if LMS_State and (LMS_State.LMSActive or LMS_State.IsTriggered) then return 0 end
+        if (Match_State and Match_State.IsFinaleActive) or (LMS_State and (LMS_State.LMSActive or LMS_State.IsTriggered)) then return 0 end
 
         local hasLay1 = GetValue("Chase_HasLay1") == true
         local hasLay2 = GetValue("Chase_HasLay2") == true
@@ -2415,6 +3253,39 @@ task.spawn(function()
         local cur = Chase_State.CurrentLayer
         local survDistances = {}
         local minD = 9999
+
+        local function GetKillerTerrorScale(kChar)
+            if GetValue("Chase_AutoKillerScale") == false then
+                return 1.0
+            end
+            if not kChar then return 1.0 end
+            local rawMult = tonumber(kChar:GetAttribute("TerrorMultiplier")) or 1.0
+            local maxDist = nil
+
+            local mod = GetChaseModule()
+            local themesTbl = mod and mod.KillerThemes and mod.KillerThemes[kChar]
+            if type(themesTbl) == "table" then
+                for distKey, entry in pairs(themesTbl) do
+                    local d = tonumber(type(entry) == "table" and entry.Distance or distKey)
+                    if d and (not maxDist or d > maxDist) then
+                        maxDist = d
+                    end
+                end
+            end
+
+            if not maxDist then
+                local nameLow = (kChar.Name .. " " .. tostring(kChar:GetAttribute("Character") or "") .. " " .. tostring(kChar:GetAttribute("DisplayName") or "")):lower()
+                if nameLow:find("sixer") or nameLow:find("guest666") or nameLow:find("666") then
+                    maxDist = 90
+                elseif nameLow:find("slasher") or nameLow:find("jason") then
+                    maxDist = 50
+                else
+                    maxDist = 60
+                end
+            end
+
+            return math.max((maxDist / 60) * rawMult, 0.25)
+        end
 
         local flatVector = Vector3.new(1, 0, 1)
 
@@ -2446,11 +3317,12 @@ task.spawn(function()
             local myRoot = myChar:FindFirstChild("HumanoidRootPart") or myChar.PrimaryPart
             if not myRoot or not survFolder then return 0 end
 
+            local myScale = GetKillerTerrorScale(myChar)
             for _, sChar in ipairs(survFolder:GetChildren()) do
                 local sHum = sChar:FindFirstChildOfClass("Humanoid")
                 local sRoot = sChar:FindFirstChild("HumanoidRootPart") or sChar.PrimaryPart
                 if sRoot and (not sHum or sHum.Health > 0) and sChar:GetAttribute("Dead") ~= true then
-                    local d = ((sRoot.Position - myRoot.Position) * flatVector).Magnitude
+                    local d = (((sRoot.Position - myRoot.Position) * flatVector).Magnitude) / myScale
                     table.insert(survDistances, d)
                     if d < minD then minD = d end
                 end
@@ -2463,7 +3335,7 @@ task.spawn(function()
                 local kHum = kChar:FindFirstChildOfClass("Humanoid")
                 local kRoot = kChar:FindFirstChild("HumanoidRootPart") or kChar.PrimaryPart
                 if kRoot and (not kHum or kHum.Health > 0) and kChar:GetAttribute("Dead") ~= true then
-                    table.insert(activeKillers, kRoot)
+                    table.insert(activeKillers, { Root = kRoot, Scale = GetKillerTerrorScale(kChar) })
                 end
             end
             if #activeKillers == 0 then return 0 end
@@ -2524,8 +3396,8 @@ task.spawn(function()
             end
 
             if targetRoot then
-                for _, kRoot in ipairs(activeKillers) do
-                    local d = ((kRoot.Position - targetRoot.Position) * flatVector).Magnitude
+                for _, kInfo in ipairs(activeKillers) do
+                    local d = (((kInfo.Root.Position - targetRoot.Position) * flatVector).Magnitude) / kInfo.Scale
                     if d < minD then minD = d end
                 end
                 table.insert(survDistances, minD)
@@ -2600,38 +3472,38 @@ task.spawn(function()
 
         if IsInCutscene() then
             if Chase_State.VoiceA or Chase_State.VoiceB then
-                StopChaseAudio(false)
+                StopChaseAudio(false, ShouldKeepNativeChaseMuted())
             end
             return
         end
 
-        if not GetValue("Chase_Active") or (LMS_State and (LMS_State.LMSActive or LMS_State.IsTriggered)) then
+        if not GetValue("Chase_Active") or (Match_State and Match_State.IsFinaleActive) or (LMS_State and (LMS_State.LMSActive or LMS_State.IsTriggered)) then
             if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
                 StopChaseAudio(false)
             end
             return
         end
 
-        local trackName = "None"
-        if IsLocalKiller() then
-            trackName = GetValue("Chase_Track") or "None"
-        else
-            trackName = GetValue("Chase_SurvTrack") or "None"
-            if trackName == "None" then
-                trackName = GetValue("Chase_Track") or "None"
+        local trackName = GetCurrentRoleTrack()
+
+        if trackName == "Off" then
+            if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced or next(SuppressedChase) ~= nil then
+                StopChaseAudio(false)
             end
+            return
         end
 
-        if trackName == "Off" or trackName == "None" then
+        if trackName == "None" then
             if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
-                StopChaseAudio(false)
+                StopChaseAudio(false, true)
+                Chase_State.ThemesSilenced = false
             end
             return
         end
 
         local startDelay = tonumber(GetValue("Chase_StartDelay")) or 2.0
         if (os.clock() - RoundSpawnTime) < startDelay then
-            if Chase_State.VoiceA or Chase_State.VoiceB then StopChaseAudio(false) end
+            if Chase_State.VoiceA or Chase_State.VoiceB then StopChaseAudio(false, ShouldKeepNativeChaseMuted()) end
             return
         end
 
@@ -2640,7 +3512,7 @@ task.spawn(function()
                 Chase_State.ZeroSince = os.clock()
             elseif os.clock() - Chase_State.ZeroSince >= 0.5 then
                 if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
-                    StopChaseAudio(false)
+                    StopChaseAudio(false, ShouldKeepNativeChaseMuted())
                 end
             end
             return
@@ -2656,21 +3528,26 @@ task.spawn(function()
 
         local trackData = TrackRegistry.Chase[trackName]
         local assetId = ResolveTrack("Chase", trackName)
-        local isTrackHotswap = (Chase_State.LastProcessedTrack ~= trackName) or (Chase_State.ActiveAsset ~= assetId)
+        local isTrackHotswap = (Chase_State.LastProcessedTrack ~= nil and Chase_State.LastProcessedTrack ~= trackName)
+            or (Chase_State.ActiveAsset ~= nil and Chase_State.ActiveAsset ~= assetId)
 
-        if targetLayer == Chase_State.LastProcessedLayer and not isTrackHotswap then
-            local activeV = (Chase_State.ActiveVoice == "A") and Chase_State.VoiceA or Chase_State.VoiceB
-            if activeV and activeV.IsPlaying then
-                local baseVol = tonumber(GetValue("Chase_Volume")) or 1.0
-                local distFactor = math.clamp(1 - (Chase_State.ClosestDistance / 100), 0, 1)
-                activeV.Volume = baseVol * (0.8 + 0.25 * distFactor)
+        local activeV = (Chase_State.ActiveVoice == "A") and Chase_State.VoiceA or Chase_State.VoiceB
+        local voiceActive = activeV ~= nil and activeV.Parent ~= nil and activeV.IsPlaying
+
+        if targetLayer == Chase_State.LastProcessedLayer and not isTrackHotswap and (voiceActive or Chase_State.IsLoading) then
+            if voiceActive then
+                if not activeV:GetAttribute("FadingIn") and not activeV:GetAttribute("FadingOut") then
+                    local baseVol = tonumber(GetValue("Chase_Volume")) or 1.0
+                    local distFactor = math.clamp(1 - (Chase_State.ClosestDistance / 100), 0, 1)
+                    activeV.Volume = baseVol * (0.8 + 0.25 * distFactor)
+                end
 
                 local pitch = tonumber(GetValue("Chase_PlaybackSpeed")) or 1.0
                 if math.abs(activeV.PlaybackSpeed - pitch) > 0.01 then
                     activeV.PlaybackSpeed = pitch
                 end
-                return
             end
+            return
         end
 
         if not trackData or not assetId then
@@ -2684,7 +3561,7 @@ task.spawn(function()
         if not hasTimings then
             if targetLayer == 4 then
                 SilenceThemesForCustomChase(fadeDuration)
-                if Chase_State.CurrentTierName ~= "ChaseOnly" or isTrackHotswap then
+                if Chase_State.CurrentTierName ~= "ChaseOnly" or isTrackHotswap or (not voiceActive and not Chase_State.IsLoading) then
                     PlayChaseSegment(assetId, "ChaseOnly", nil, false, nil, nil)
                 end
             else
@@ -2734,17 +3611,25 @@ task.spawn(function()
             return
         end
 
-        if Chase_State.CurrentTierName ~= targetTierName or isTrackHotswap then
+        if Chase_State.CurrentTierName ~= targetTierName or isTrackHotswap or (not voiceActive and not Chase_State.IsLoading) then
             local prevTier = Chase_State.CurrentTierName
+            local useTrans1_2 = (GetValue("Chase_Trans_1_2") ~= false)
+            local useTrans2_3 = (GetValue("Chase_Trans_2_3") ~= false)
+            local useTrans3_Chase = (GetValue("Chase_Trans_3_Chase") ~= false)
+            local useTransSkipToChase = (GetValue("Chase_Trans_SkipToChase") ~= false)
+            local hasLowerLayers = (hasLay1 and timings.Lay1 ~= nil) or (hasLay2 and timings.Lay2 ~= nil) or (hasLay3 and timings.Lay3 ~= nil)
+
             if isTrackHotswap then
                 PlayChaseSegment(assetId, targetTierName, targetSegment, false, nil, nil)
-            elseif prevTier == "Lay1" and targetTierName == "Lay2" and timings.Trans1_2 then
+            elseif prevTier == "Lay1" and targetTierName == "Lay2" and timings.Trans1_2 and useTrans1_2 then
                 PlayChaseSegment(assetId, "Trans1_2", timings.Trans1_2, true, "Lay2", timings.Lay2)
-            elseif prevTier == "Lay2" and targetTierName == "Lay3" and timings.Trans2_3 then
+            elseif prevTier == "Lay2" and targetTierName == "Lay3" and timings.Trans2_3 and useTrans2_3 then
                 PlayChaseSegment(assetId, "Trans2_3", timings.Trans2_3, true, "Lay3", timings.Lay3)
-            elseif prevTier == "Lay3" and targetTierName == "Chase" and timings.Trans3_Chase then
+            elseif prevTier == "Lay3" and targetTierName == "Chase" and timings.Trans3_Chase and useTrans3_Chase then
                 PlayChaseSegment(assetId, "Trans3_Chase", timings.Trans3_Chase, true, "Chase", timings.Chase)
-            elseif targetTierName == "Chase" and (prevTier == "Lay1" or prevTier == "Lay2") and timings.Trans3_Chase then
+            elseif targetTierName == "Chase" and (prevTier == "Lay1" or prevTier == "Lay2") and timings.Trans3_Chase and useTransSkipToChase then
+                PlayChaseSegment(assetId, "Trans3_Chase", timings.Trans3_Chase, true, "Chase", timings.Chase)
+            elseif targetTierName == "Chase" and prevTier == nil and not hasLowerLayers and timings.Trans3_Chase and useTrans3_Chase then
                 PlayChaseSegment(assetId, "Trans3_Chase", timings.Trans3_Chase, true, "Chase", timings.Chase)
             else
                 PlayChaseSegment(assetId, targetTierName, targetSegment, false, nil, nil)
@@ -2764,8 +3649,20 @@ task.spawn(function()
                 if not GetValue("Chase_Active") then return end
 
                 local rawLayer = tonumber(layer) or 0
-                if rawLayer > 0 then
-                    SilenceThemesForCustomChase(0)
+                if rawLayer > 0 and typeof(ShouldKeepNativeChaseMuted) == "function" and ShouldKeepNativeChaseMuted() then
+                    local char = LocalPlayer.Character
+                    if char and char:GetAttribute("MuteChaseThemes") ~= true then
+                        char:SetAttribute("MuteChaseThemes", true)
+                    end
+                    local themes = workspace:FindFirstChild("Themes")
+                    if themes then
+                        for _, snd in ipairs(themes:GetChildren()) do
+                            if IsNativeTerrorSound(snd) then
+                                SuppressChaseAudio(snd)
+                            end
+                        end
+                    end
+                    FadeChaseMuteBus(0, 0)
                     Chase_State.ThemesSilenced = true
                 end
             end)
@@ -2805,6 +3702,9 @@ task.spawn(function()
             end
 
             if RoundOverStartTime then
+                if next(SuppressedAmbient) ~= nil or Ambient_MuteBus.Volume < 1 then
+                    RestoreAmbientAudio(0.4)
+                end
                 if os.clock() - RoundOverStartTime < 2.0 then
                     return
                 else
@@ -2818,32 +3718,82 @@ task.spawn(function()
         end
 
         if not CanRunChase() or inLobbyNow then
-            if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced then
+            local char = LocalPlayer.Character
+            if char and char:GetAttribute("MuteChaseThemes") ~= nil then
+                char:SetAttribute("MuteChaseThemes", nil)
+            end
+            if Chase_State.VoiceA or Chase_State.VoiceB or Chase_State.ThemesSilenced or (next(SuppressedChase) ~= nil and not Chase_IsRestoring) then
                 StopChaseAudio(true)
+            elseif Chase_MuteBus.Volume < 1 and not Chase_IsRestoring then
+                FadeChaseMuteBus(1, 0)
+            end
+            if next(SuppressedAmbient) ~= nil and not Ambient_IsRestoring then
+                RestoreAmbientAudio(0)
+            elseif Ambient_MuteBus.Volume < 1 and not Ambient_IsRestoring then
+                FadeAmbientMuteBus(1, 0)
             end
             return
         end
 
+        Match_State.Update()
         local activeLayer = ResolveGameActiveLayer()
         ApplyTargetLayer(activeLayer)
 
         local isChaseRunning = GetValue("Chase_Active") and (Chase_State and Chase_State.CurrentLayer > 0)
+        local keepMuted = ShouldKeepNativeChaseMuted()
         local themes = workspace:FindFirstChild("Themes")
 
-        if isChaseRunning then
+        if isChaseRunning or keepMuted then
+            local char = LocalPlayer.Character
+            if char and char:GetAttribute("MuteChaseThemes") ~= true then
+                char:SetAttribute("MuteChaseThemes", true)
+            end
+            if Chase_IsRestoring then
+                Chase_RestoreToken = Chase_RestoreToken + 1
+                Chase_IsRestoring = false
+            end
             if themes then
                 for _, snd in ipairs(themes:GetChildren()) do
-                    if snd:IsA("Sound") and not IsSoundProtected(snd) and not IsLMSSound(snd) then
-                        if snd.SoundGroup ~= Chase_MuteBus then
-                            SuppressChaseAudio(snd)
-                        end
+                    if IsNativeTerrorSound(snd) and snd.SoundGroup ~= Chase_MuteBus then
+                        SuppressChaseAudio(snd)
                     end
                 end
             end
             FadeChaseMuteBus(0, 0)
         else
-            if Chase_State and not Chase_State.ThemesSilenced and next(SuppressedChase) ~= nil then
-                RestoreNativeChase(0.4)
+            local char = LocalPlayer.Character
+            if char and char:GetAttribute("MuteChaseThemes") ~= nil then
+                char:SetAttribute("MuteChaseThemes", nil)
+            end
+            if Chase_State and Chase_State.ThemesSilenced then
+                Chase_State.ThemesSilenced = false
+            end
+            if next(SuppressedChase) ~= nil then
+                RestoreNativeChase(tonumber(GetValue("Chase_FadeTime")) or 0.6)
+            elseif Chase_MuteBus.Volume < 1 and not Chase_IsRestoring then
+                FadeChaseMuteBus(1, tonumber(GetValue("Chase_FadeTime")) or 0.6)
+            end
+        end
+
+        if IsCustomChaseBlockingAmbient() then
+            if Ambient_IsRestoring then
+                Ambient_RestoreToken = Ambient_RestoreToken + 1
+                Ambient_IsRestoring = false
+            end
+            if themes then
+                for _, snd in ipairs(themes:GetChildren()) do
+                    if IsExtraneousAmbientSound(snd) and snd.SoundGroup ~= Ambient_MuteBus then
+                        SuppressAmbientAudio(snd)
+                    end
+                end
+            end
+            FadeAmbientMuteBus(0, 0)
+        else
+            local fadeDur = tonumber(GetValue("Chase_FadeTime")) or 0.6
+            if next(SuppressedAmbient) ~= nil then
+                RestoreAmbientAudio(fadeDur)
+            elseif Ambient_MuteBus.Volume < 1 and not Ambient_IsRestoring then
+                FadeAmbientMuteBus(1, fadeDur)
             end
         end
     end
@@ -3196,6 +4146,541 @@ task.spawn(function()
 
     RegisterBudgetTask("VeeGraffiti", UpdateVeeGraffitiESP)
 
+    -- [ Projectile ESP ]
+    local ProjRepModule = nil
+    local ProjMathModule = nil
+    local ProjModChecked = false
+    local ActiveProjVisuals = {}
+
+    local function EnsureProjectileModules()
+        if ProjModChecked then
+            return ProjRepModule, ProjMathModule
+        end
+        ProjModChecked = true
+        pcall(function()
+            local repScript = ReplicatedStorage:FindFirstChild("Systems")
+                and ReplicatedStorage.Systems:FindFirstChild("Player")
+                and ReplicatedStorage.Systems.Player:FindFirstChild("Game")
+                and ReplicatedStorage.Systems.Player.Game:FindFirstChild("ProjectileReplication")
+            if repScript then
+                ProjRepModule = require(repScript)
+            end
+        end)
+        pcall(function()
+            local mathScript = ReplicatedStorage:FindFirstChild("Modules")
+                and ReplicatedStorage.Modules:FindFirstChild("Gameplay")
+                and ReplicatedStorage.Modules.Gameplay:FindFirstChild("Projectiles")
+            if mathScript then
+                ProjMathModule = require(mathScript)
+            end
+        end)
+        return ProjRepModule, ProjMathModule
+    end
+
+    local function ClearProjectileESP()
+        for key, entry in pairs(ActiveProjVisuals) do
+            if entry and entry.Folder and entry.Folder.Parent then
+                entry.Folder:Destroy()
+            end
+        end
+        table.clear(ActiveProjVisuals)
+    end
+
+    local function EvalProjPos(t, initPos, initVel, grav, mathMod)
+        if mathMod and typeof(mathMod.getPos) == "function" then
+            local ok, res = pcall(mathMod.getPos, t, initPos, initVel, grav)
+            if ok and typeof(res) == "Vector3" then
+                return res
+            end
+        end
+        local g = tonumber(grav) or 0
+        return initPos + (initVel * t) + Vector3.new(0, -math.abs(g) * 0.5 * t * t, 0)
+    end
+
+    local function GetProjectileThickness(proj)
+        local model = proj and proj.Model
+        if model then
+            if model:IsA("Model") then
+                local ok, ext = pcall(function() return model:GetExtentsSize() end)
+                if ok and typeof(ext) == "Vector3" then
+                    return math.clamp(math.max(ext.X, ext.Y), 0.4, 8.0)
+                end
+            elseif model:IsA("BasePart") then
+                return math.clamp(math.max(model.Size.X, model.Size.Y), 0.4, 8.0)
+            end
+        end
+        return 0.8
+    end
+
+    local function UpdateProjectileESP()
+        local enabled = GetValue("ProjESP_Enabled")
+        if not enabled or IsInLobby() then
+            if next(ActiveProjVisuals) ~= nil then
+                ClearProjectileESP()
+            end
+            return
+        end
+
+        local repMod, mathMod = EnsureProjectileModules()
+        if not repMod or type(repMod.Projectiles) ~= "table" then
+            return
+        end
+
+        local colorKey = GetValue("ProjESP_Color") or "Red"
+        local espColor = (ColorPresets and ColorPresets[colorKey]) or Color3.fromRGB(255, 0, 0)
+        local previewSec = math.clamp(tonumber(GetValue("ProjESP_Duration")) or 3.0, 0.5, 6.0)
+        local showHighlight = (GetValue("ProjESP_HighlightModel") ~= false)
+
+        local seen = {}
+
+        for key, proj in pairs(repMod.Projectiles) do
+            if type(proj) == "table" and proj.Running ~= false and proj.InitialCFrame and proj.InitialVelocity then
+                local modelOk = (proj.Model == nil) or (typeof(proj.Model) == "Instance" and proj.Model.Parent ~= nil)
+                if modelOk then
+                    seen[key] = true
+
+                    local initPos = proj.InitialCFrame.Position
+                    local initVel = proj.InitialVelocity
+                    local grav = tonumber(proj.Gravity) or 0
+                    local isCurved = math.abs(grav) > 0.05
+                    local segCount = isCurved and 6 or 1
+                    local thickness = GetProjectileThickness(proj)
+
+                    local curPos = initPos
+                    if typeof(proj.Model) == "Instance" and proj.Model.Parent then
+                        local okPiv, piv = pcall(function() return proj.Model:GetPivot() end)
+                        if okPiv and typeof(piv) == "CFrame" then
+                            curPos = piv.Position
+                        end
+                    end
+
+                    local tBase = proj.InitialTick and math.max(tick() - proj.InitialTick, 0) or 0
+                    local pBase = EvalProjPos(tBase, initPos, initVel, grav, mathMod)
+
+                    local entry = ActiveProjVisuals[key]
+                    if not entry or not entry.Folder or not entry.Folder.Parent or #entry.Segments ~= segCount then
+                        if entry and entry.Folder and entry.Folder.Parent then
+                            entry.Folder:Destroy()
+                        end
+
+                        local folder = Instance.new("Folder")
+                        folder.Name = "FPlus_ProjESP_" .. tostring(key)
+                        folder.Parent = workspace
+
+                        local segs = {}
+                        for i = 1, segCount do
+                            local part = Instance.new("Part")
+                            part.Name = "Seg_" .. tostring(i)
+                            part.Anchored = true
+                            part.CanCollide = false
+                            part.CanQuery = false
+                            part.CanTouch = false
+                            part.CastShadow = false
+                            part.Material = Enum.Material.Plastic
+                            part.Transparency = 0.65
+                            part.Color = espColor
+                            part.Parent = folder
+
+                            local adorn = Instance.new("BoxHandleAdornment")
+                            adorn.Name = "Box"
+                            adorn.AlwaysOnTop = true
+                            adorn.ZIndex = 10
+                            adorn.Transparency = 0.45
+                            adorn.Color3 = espColor
+                            adorn.Adornee = part
+                            adorn.Parent = part
+
+                            segs[i] = { Part = part, Adorn = adorn }
+                        end
+
+                        local hl = Instance.new("Highlight")
+                        hl.Name = "ModelHL"
+                        hl.FillColor = espColor
+                        hl.OutlineColor = espColor
+                        hl.FillTransparency = 0.4
+                        hl.OutlineTransparency = 0
+                        hl.Enabled = false
+                        hl.Parent = folder
+
+                        entry = { Folder = folder, Segments = segs, Highlight = hl }
+                        ActiveProjVisuals[key] = entry
+                    end
+
+                    if entry.Highlight then
+                        if showHighlight and typeof(proj.Model) == "Instance" and proj.Model.Parent then
+                            entry.Highlight.Adornee = proj.Model
+                            entry.Highlight.FillColor = espColor
+                            entry.Highlight.OutlineColor = espColor
+                            entry.Highlight.Enabled = true
+                        else
+                            entry.Highlight.Enabled = false
+                        end
+                    end
+
+                    local stepSec = previewSec / segCount
+                    for i = 1, segCount do
+                        local seg = entry.Segments[i]
+                        local sA = (i - 1) * stepSec
+                        local sB = i * stepSec
+                        local pA = curPos + (EvalProjPos(tBase + sA, initPos, initVel, grav, mathMod) - pBase)
+                        local pB = curPos + (EvalProjPos(tBase + sB, initPos, initVel, grav, mathMod) - pBase)
+                        local len = (pB - pA).Magnitude
+
+                        if len > 0.05 then
+                            local sz = Vector3.new(thickness, thickness, len)
+                            seg.Part.Size = sz
+                            seg.Part.CFrame = CFrame.lookAt(pA, pB) * CFrame.new(0, 0, -len * 0.5)
+                            seg.Part.Color = espColor
+                            seg.Part.Transparency = 0.65
+                            seg.Adorn.Size = sz
+                            seg.Adorn.Color3 = espColor
+                            seg.Adorn.Visible = true
+                        else
+                            seg.Part.Transparency = 1
+                            seg.Adorn.Visible = false
+                        end
+                    end
+                end
+            end
+        end
+
+        for key, entry in pairs(ActiveProjVisuals) do
+            if not seen[key] then
+                if entry and entry.Folder and entry.Folder.Parent then
+                    entry.Folder:Destroy()
+                end
+                ActiveProjVisuals[key] = nil
+            end
+        end
+    end
+
+    RegisterBudgetTask("Projectiles", UpdateProjectileESP)
+
+    -- [ Hitbox Dragging Tech (Guest 1337) ]
+    local HDT_State = {
+        IsDragging = false,
+        LastTriggerAt = 0,
+        ActiveConn = nil,
+        ActiveBV = nil,
+        PrevAutoRotate = true,
+        HookedChar = nil,
+        Conns = {},
+        BlockAnimIds = {},
+        AnimsBuilt = false
+    }
+
+    function HDT_State.BuildBlockAnims()
+        table.clear(HDT_State.BlockAnimIds)
+
+        local function ScanForBlock(tbl, parentKey)
+            if type(tbl) ~= "table" then return end
+            for k, v in pairs(tbl) do
+                local effKey = (type(k) == "string") and k or parentKey
+                if type(v) == "string" then
+                    if effKey and tostring(effKey):lower():find("block") then
+                        local id = v:match("(%d+)")
+                        if id then HDT_State.BlockAnimIds[id] = true end
+                    end
+                elseif type(v) == "table" then
+                    ScanForBlock(v, effKey)
+                end
+            end
+        end
+
+        if GetValue("require") then
+            pcall(function()
+                local gSurv = SurvivorAssets and (SurvivorAssets:FindFirstChild("Guest1337") or SurvivorAssets:FindFirstChild("!Guest1337"))
+                local gCfg = gSurv and gSurv:FindFirstChild("Config")
+                if gCfg then
+                    local cfg = require(gCfg)
+                    if type(cfg) == "table" and type(cfg.Animations) == "table" then
+                        ScanForBlock(cfg.Animations, nil)
+                    end
+                end
+            end)
+            pcall(function()
+                local survSkins = SkinsAssets and SkinsAssets:FindFirstChild("Survivors")
+                local gSkins = survSkins and (survSkins:FindFirstChild("Guest1337") or survSkins:FindFirstChild("!Guest1337"))
+                if gSkins then
+                    for _, m in ipairs(gSkins:QueryDescendants("ModuleScript#Config")) do
+                        if m.Parent and not m.Parent:IsA("Model") then
+                            local ok, cfg = pcall(require, m)
+                            if ok and type(cfg) == "table" and type(cfg.Animations) == "table" then
+                                ScanForBlock(cfg.Animations, nil)
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+
+        for cName, animTbl in pairs(AllAnimations) do
+            if type(animTbl) == "table" and tostring(cName):lower():find("guest") then
+                ScanForBlock(animTbl, nil)
+            end
+        end
+
+        HDT_State.AnimsBuilt = true
+    end
+
+    local function HDT_ClearHookConns()
+        for _, c in ipairs(HDT_State.Conns) do
+            pcall(function() c:Disconnect() end)
+        end
+        table.clear(HDT_State.Conns)
+    end
+
+    local function HDT_StopDrag()
+        if HDT_State.ActiveConn then
+            pcall(function() HDT_State.ActiveConn:Disconnect() end)
+            HDT_State.ActiveConn = nil
+        end
+        if HDT_State.ActiveBV then
+            pcall(function() HDT_State.ActiveBV:Destroy() end)
+            HDT_State.ActiveBV = nil
+        end
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum and HDT_State.IsDragging then
+            hum.AutoRotate = (HDT_State.PrevAutoRotate ~= false)
+        end
+        HDT_State.IsDragging = false
+    end
+
+    local function HDT_GetNearestKiller(maxRange)
+        local char = LocalPlayer.Character
+        local hrp = char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart)
+        if not hrp then return nil end
+
+        local pFld = workspace:FindFirstChild("Players")
+        local kFld = pFld and pFld:FindFirstChild("Killers")
+        if not kFld then return nil end
+
+        local bestK, bestRoot, bestDist = nil, nil, maxRange or 30
+        local flat = Vector3.new(1, 0, 1)
+        for _, k in ipairs(kFld:GetChildren()) do
+            if k:IsA("Model") and k:GetAttribute("Dead") ~= true then
+                local kHum = k:FindFirstChildOfClass("Humanoid")
+                local kRoot = k:FindFirstChild("HumanoidRootPart") or k.PrimaryPart
+                if kRoot and (not kHum or kHum.Health > 0) then
+                    local d = ((kRoot.Position - hrp.Position) * flat).Magnitude
+                    if d <= bestDist then
+                        bestDist = d
+                        bestK = k
+                        bestRoot = kRoot
+                    end
+                end
+            end
+        end
+        return bestK, bestRoot, bestDist
+    end
+
+    local function HDT_IsGuestBlockAnim(track, char)
+        if not track or not track.Animation then return false end
+
+        if not HDT_State.AnimsBuilt or next(HDT_State.BlockAnimIds) == nil then
+            HDT_State.BuildBlockAnims()
+        end
+
+        local animId = tostring(track.Animation.AnimationId or ""):match("(%d+)")
+        if animId and HDT_State.BlockAnimIds[animId] then
+            return true
+        end
+
+        local isActorMatch = false
+        pcall(function()
+            local actorsMod = ReplicatedStorage:FindFirstChild("Modules")
+                and ReplicatedStorage.Modules:FindFirstChild("Gameplay")
+                and ReplicatedStorage.Modules.Gameplay:FindFirstChild("Actors")
+            local act = actorsMod and require(actorsMod).CurrentActors[LocalPlayer]
+            local blkTrack = act and act.Animations and act.Animations.Block
+            if blkTrack then
+                if track == blkTrack then
+                    isActorMatch = true
+                elseif blkTrack.Animation then
+                    local blkId = tostring(blkTrack.Animation.AnimationId or ""):match("(%d+)")
+                    if blkId and blkId == animId then
+                        isActorMatch = true
+                    end
+                end
+            end
+        end)
+        if isActorMatch then return true end
+
+        local hasBlockAbility = MainUI and MainUI:FindFirstChild("AbilityContainer") and MainUI.AbilityContainer:FindFirstChild("Block") ~= nil
+        if not hasBlockAbility then
+            local actorAttr = tostring(char and (char:GetAttribute("Actor") or char:GetAttribute("Character") or char.Name) or ""):lower()
+            if not actorAttr:find("guest") then return false end
+        end
+
+        local tName = (track.Name or ""):lower()
+        local aName = (track.Animation.Name or ""):lower()
+        if tName:find("block") or aName:find("block") or tName:find("parry") or aName:find("parry") or tName:find("shield") or aName:find("guard") then
+            return true
+        end
+
+        return false
+    end
+
+    local function HDT_RunDrag()
+        if not GetValue("Fun_HitboxDrag") then return end
+        local now = os.clock()
+        if HDT_State.IsDragging or (now - HDT_State.LastTriggerAt) < 0.55 then return end
+
+        local char = LocalPlayer.Character
+        if not char or char:GetAttribute("Dead") == true then return end
+        local survFld = workspace:FindFirstChild("Players") and workspace.Players:FindFirstChild("Survivors")
+        if survFld and not char:IsDescendantOf(survFld) then return end
+
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        local hrp = char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
+        if not hum or not hrp or hum.Health <= 0 or hrp.Anchored then return end
+
+        local maxRange = tonumber(GetValue("Fun_HDT_MaxRange")) or 30
+        local kModel, kRoot = HDT_GetNearestKiller(maxRange)
+        if not kModel or not kRoot then return end
+
+        HDT_State.LastTriggerAt = now
+        local startDelay = math.clamp(tonumber(GetValue("Fun_HDT_StartDelay")) or 0, 0, 2.0)
+
+        task.spawn(function()
+            if startDelay > 0 then
+                task.wait(startDelay)
+            end
+
+            if not GetValue("Fun_HitboxDrag") or HDT_State.IsDragging then return end
+            if not char.Parent or not hum.Parent or not hrp.Parent or hum.Health <= 0 or hrp.Anchored then return end
+            if char:GetAttribute("Dead") == true then return end
+
+            local targetK, targetRoot = HDT_GetNearestKiller(maxRange)
+            if not targetK or not targetRoot then return end
+
+            local dragSpeed = math.clamp(tonumber(GetValue("Fun_HDT_Speed")) or 10, 5, 25)
+            local dragDuration = math.clamp(tonumber(GetValue("Fun_HDT_Duration")) or 0.4, 0.1, 0.8)
+
+            HDT_State.IsDragging = true
+            HDT_State.PrevAutoRotate = hum.AutoRotate
+            hum.AutoRotate = false
+
+            for _, old in ipairs(hrp:GetChildren()) do
+                if old.Name == "FPlus_HDT_BV" then old:Destroy() end
+            end
+
+            local bv = Instance.new("BodyVelocity")
+            bv.Name = "FPlus_HDT_BV"
+            bv.MaxForce = Vector3.new(100000, 0, 100000)
+            bv.P = 12500
+            bv.Velocity = Vector3.zero
+            bv.Parent = hrp
+            HDT_State.ActiveBV = bv
+
+            local dragStart = os.clock()
+            HDT_State.ActiveConn = RunService.Heartbeat:Connect(function()
+                if not GetValue("Fun_HitboxDrag") or not char.Parent or not hum.Parent or not hrp.Parent
+                    or hum.Health <= 0 or hrp.Anchored or char:GetAttribute("Dead") == true then
+                    HDT_StopDrag()
+                    return
+                end
+
+                if (os.clock() - dragStart) >= dragDuration then
+                    HDT_StopDrag()
+                    return
+                end
+
+                if not targetK.Parent or not targetRoot.Parent or targetK:GetAttribute("Dead") == true then
+                    targetK, targetRoot = HDT_GetNearestKiller(maxRange)
+                    if not targetK or not targetRoot then
+                        HDT_StopDrag()
+                        return
+                    end
+                end
+
+                local kHum = targetK:FindFirstChildOfClass("Humanoid")
+                if kHum and kHum.Health <= 0 then
+                    HDT_StopDrag()
+                    return
+                end
+
+                local myPos = hrp.Position
+                local kPos = targetRoot.Position
+                local flatDir = Vector3.new(kPos.X - myPos.X, 0, kPos.Z - myPos.Z)
+                local dist = flatDir.Magnitude
+
+                if dist > 1.25 then
+                    local unit = flatDir / dist
+                    bv.Velocity = unit * dragSpeed
+                else
+                    bv.Velocity = Vector3.zero
+                end
+            end)
+        end)
+    end
+
+    local function HDT_HookCharacter(char)
+        if not char or HDT_State.HookedChar == char then return end
+        HDT_StopDrag()
+        HDT_ClearHookConns()
+        HDT_State.HookedChar = char
+
+        task.spawn(function()
+            HDT_State.BuildBlockAnims()
+            local hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
+            local animator = hum and (hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 5))
+            if animator then
+                table.insert(HDT_State.Conns, animator.AnimationPlayed:Connect(function(track)
+                    if not GetValue("Fun_HitboxDrag") then return end
+                    if HDT_IsGuestBlockAnim(track, char) then
+                        HDT_RunDrag()
+                    end
+                end))
+            end
+
+            local spd = char:FindFirstChild("SpeedMultipliers") or char:WaitForChild("SpeedMultipliers", 5)
+            if spd then
+                table.insert(HDT_State.Conns, spd.ChildAdded:Connect(function(child)
+                    if not GetValue("Fun_HitboxDrag") then return end
+                    if child.Name == "GuestBlocking" then
+                        HDT_RunDrag()
+                    end
+                end))
+            end
+
+            local qBox = char:FindFirstChild("QueryHitbox")
+            if qBox and qBox:IsA("BasePart") then
+                local baseSize = qBox.Size
+                table.insert(HDT_State.Conns, qBox:GetPropertyChangedSignal("Size"):Connect(function()
+                    if not GetValue("Fun_HitboxDrag") then return end
+                    if qBox.Size.Magnitude > baseSize.Magnitude + 0.25 then
+                        local hasBlockBtn = MainUI and MainUI:FindFirstChild("AbilityContainer") and MainUI.AbilityContainer:FindFirstChild("Block") ~= nil
+                        if hasBlockBtn then
+                            HDT_RunDrag()
+                        end
+                    end
+                end))
+            end
+
+            local remote = Network and Network:FindFirstChildOfClass("RemoteEvent")
+            if remote then
+                table.insert(HDT_State.Conns, remote.OnClientEvent:Connect(function(...)
+                    local args = { ... }
+                    if args[1] == (LocalPlayer.Name .. "1337ParryIcon") and args[2] and args[2][1] == true then
+                        HDT_StopDrag()
+                    elseif args[1] == (LocalPlayer.Name .. "1337BlockBroken") then
+                        HDT_StopDrag()
+                    end
+                end))
+            end
+        end)
+    end
+
+    LocalPlayer.CharacterAdded:Connect(function(char)
+        HDT_StopDrag()
+        task.delay(0.2, HDT_HookCharacter, char)
+    end)
+    if LocalPlayer.Character then
+        task.spawn(HDT_HookCharacter, LocalPlayer.Character)
+    end
+
     -- [ UI Package Definition ]
     local AddonsPackage = {
         ["Visual_Generators"] = {
@@ -3269,6 +4754,51 @@ task.spawn(function()
                 ["ExtraData"] = { ["Options"] = "Pink-Purple|Purple|Cyan|Green|Gold|Red|White" }
             }
         },
+        ["Visual_Projectiles"] = {
+            ["TabAttributes"] = {
+                ["DisplayTitle"] = "Projectile ESP",
+                ["LayoutOrder"] = 108
+            },
+            ["ProjESP_Enabled"] = {
+                ["DisplayDescription"] = "Shows real-time 3D trajectory beams and wallhack highlights for flying projectiles",
+                ["DisplayTitle"] = "Enable Projectile ESP",
+                ["LayoutOrder"] = 1,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    if not val then
+                        ClearProjectileESP()
+                    end
+                end
+            },
+            ["ProjESP_HighlightModel"] = {
+                ["DisplayDescription"] = "Highlights the projectile model itself through walls",
+                ["DisplayTitle"] = "Highlight Projectile Model",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true
+            },
+            ["ProjESP_Duration"] = {
+                ["DisplayDescription"] = "How many seconds ahead to project the flight path beam",
+                ["DisplayTitle"] = "Trajectory Length (s)",
+                ["LayoutOrder"] = 3,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 3.0,
+                ["ExtraData"] = { ["MinValue"] = 0.5, ["MaxValue"] = 6.0, ["Step"] = 0.5 }
+            },
+            ["ProjESP_Color"] = {
+                ["DisplayDescription"] = "Color palette for projectile trajectory beams and highlights",
+                ["DisplayTitle"] = "Projectile ESP Color",
+                ["LayoutOrder"] = 4,
+                ["Savable"] = true,
+                ["InstanceType"] = "StringValue",
+                ["DefaultInstanceValue"] = "Red",
+                ["ExtraData"] = { ["Options"] = "Red|Cyan|Gold|Green|Purple|Pink-Purple|White" }
+            }
+        },
         ["Fun_Credits"] = {
             ["TabAttributes"] = {
                 ["DisplayTitle"] = "Mod Made " .. RichTextGradientColor("by doomsenseteam/R3cup", {
@@ -3302,7 +4832,6 @@ task.spawn(function()
                 end,
                 ["CustomSetup"] = function(self)
                     RegisterBudgetTask("LMS", CheckTrueLMS)
-                    RegisterBudgetTask("Chase", SyncChaseAudio)
                 end
             },
             ["LMS_Volume"] = {
@@ -3496,6 +5025,9 @@ task.spawn(function()
                     else
                         SyncChaseAudio()
                     end
+                end,
+                ["CustomSetup"] = function(self)
+                    RegisterBudgetTask("Chase", SyncChaseAudio)
                 end
             },
             ["Chase_ConfigTrack"] = {
@@ -3539,8 +5071,11 @@ task.spawn(function()
                 ["ExtraData"] = { ["Options"] = initChase },
                 ["ScriptFunction"] = function(self, val)
                     local cfgTrack = GetValue("Chase_ConfigTrack")
-                    if (not cfgTrack or cfgTrack == "None" or cfgTrack == "Off") and val and val ~= "None" and val ~= "Off" then
+                    if (not cfgTrack or cfgTrack == "None" or cfgTrack == "Off" or (cfgTrack == "Auto" and not IsLocalKiller())) and val and val ~= "None" and val ~= "Off" then
+                        LastAutoConfigTrack = val
+                        AutoConfigApplying = true
                         LoadTrackConfig(val)
+                        AutoConfigApplying = false
                     end
                     SyncChaseAudio()
                 end
@@ -3555,8 +5090,11 @@ task.spawn(function()
                 ["ExtraData"] = { ["Options"] = initChase },
                 ["ScriptFunction"] = function(self, val)
                     local cfgTrack = GetValue("Chase_ConfigTrack")
-                    if (not cfgTrack or cfgTrack == "None" or cfgTrack == "Off") and val and val ~= "None" and val ~= "Off" then
+                    if (not cfgTrack or cfgTrack == "None" or cfgTrack == "Off" or (cfgTrack == "Auto" and IsLocalKiller())) and val and val ~= "None" and val ~= "Off" then
+                        LastAutoConfigTrack = val
+                        AutoConfigApplying = true
                         LoadTrackConfig(val)
+                        AutoConfigApplying = false
                     end
                     SyncChaseAudio()
                 end
@@ -3576,10 +5114,54 @@ task.spawn(function()
                     end
                 end
             },
+            ["Chase_Trans_1_2"] = {
+                ["DisplayDescription"] = "Play lay1-2 transition segment when going from Layer 1 to Layer 2",
+                ["DisplayTitle"] = "Transition: Layer 1 -> Layer 2",
+                ["LayoutOrder"] = 7,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_Trans_2_3"] = {
+                ["DisplayDescription"] = "Play lay2-3 transition segment when going from Layer 2 to Layer 3",
+                ["DisplayTitle"] = "Transition: Layer 2 -> Layer 3",
+                ["LayoutOrder"] = 8,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_Trans_3_Chase"] = {
+                ["DisplayDescription"] = "Play lay3-chase transition segment when going from Layer 3 to Chase",
+                ["DisplayTitle"] = "Transition: Layer 3 -> Chase",
+                ["LayoutOrder"] = 9,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
+            ["Chase_Trans_SkipToChase"] = {
+                ["DisplayDescription"] = "Play lay3-chase transition segment when skipping straight from Layer 1 or Layer 2 to Chase",
+                ["DisplayTitle"] = "Transition: Layer 1/2 -> Chase",
+                ["LayoutOrder"] = 10,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
             ["Chase_Volume"] = {
                 ["DisplayDescription"] = "Base volume multiplier for Chase audio",
                 ["DisplayTitle"] = "Chase Volume",
-                ["LayoutOrder"] = 6,
+                ["LayoutOrder"] = 11,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 1.0,
@@ -3591,7 +5173,7 @@ task.spawn(function()
             ["Chase_PlaybackSpeed"] = {
                 ["DisplayDescription"] = "Playback speed and pitch multiplier for Chase audio",
                 ["DisplayTitle"] = "Playback Speed (Pitch)",
-                ["LayoutOrder"] = 7,
+                ["LayoutOrder"] = 12,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 1.0,
@@ -3603,7 +5185,7 @@ task.spawn(function()
             ["Chase_RangeMultiplier"] = {
                 ["DisplayDescription"] = "Scales all chase/terror distance stages in multiples (e.g. 2.0x doubles all radii)",
                 ["DisplayTitle"] = "Stage Range Multiplier",
-                ["LayoutOrder"] = 8,
+                ["LayoutOrder"] = 13,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 1.0,
@@ -3612,10 +5194,34 @@ task.spawn(function()
                     OnChaseSettingModified()
                 end
             },
+            ["Chase_AutoKillerScale"] = {
+                ["DisplayDescription"] = "Automatically scales terror/chase radii based on each killer's real Terror Radius (fixes Sixer/Guest 666 native lay1 leak)",
+                ["DisplayTitle"] = "Auto Killer Terror Scale",
+                ["LayoutOrder"] = 14,
+                ["Savable"] = true,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true,
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                    SyncChaseAudio()
+                end
+            },
+            ["Chase_FadeStrength"] = {
+                ["DisplayDescription"] = "Controls how sharply and deeply the outgoing part fades out during transitions (0 = gentle blend, 1 = normal, 2+ = sharp deep cut)",
+                ["DisplayTitle"] = "Transition Fade Strength",
+                ["LayoutOrder"] = 15,
+                ["Savable"] = true,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 1.0,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 3.0, ["Step"] = 0.1 },
+                ["ScriptFunction"] = function(self, val)
+                    OnChaseSettingModified()
+                end
+            },
             ["Chase_FadeTime"] = {
                 ["DisplayDescription"] = "Duration of smooth volume fade and crossfade between layers (seconds)",
                 ["DisplayTitle"] = "Fade / Crossfade Time",
-                ["LayoutOrder"] = 9,
+                ["LayoutOrder"] = 16,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 0.6,
@@ -3627,7 +5233,7 @@ task.spawn(function()
             ["Chase_OverlapBuffer"] = {
                 ["DisplayDescription"] = "Distance overlap for smooth hysteresis crossfade between layers (studs)",
                 ["DisplayTitle"] = "Layer Overlap Buffer",
-                ["LayoutOrder"] = 10,
+                ["LayoutOrder"] = 17,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 3.57,
@@ -3639,7 +5245,7 @@ task.spawn(function()
             ["Chase_BonusExpansion"] = {
                 ["DisplayDescription"] = "Extra distance added when Chase absorbs all layers (Total Size + Bonus studs)",
                 ["DisplayTitle"] = "Chase Absorbed Bonus (Studs)",
-                ["LayoutOrder"] = 11,
+                ["LayoutOrder"] = 18,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 25.0,
@@ -3651,7 +5257,7 @@ task.spawn(function()
             ["Chase_StartDelay"] = {
                 ["DisplayDescription"] = "Delay before chase audio can start playing when round begins (seconds)",
                 ["DisplayTitle"] = "Round Start Delay",
-                ["LayoutOrder"] = 12,
+                ["LayoutOrder"] = 19,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 2.0,
@@ -3663,7 +5269,7 @@ task.spawn(function()
             ["Chase_HasChase"] = {
                 ["DisplayDescription"] = "Enable or disable Chase segment (Layer 4)",
                 ["DisplayTitle"] = "Enable: Chase Segment",
-                ["LayoutOrder"] = 13,
+                ["LayoutOrder"] = 20,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = true,
@@ -3675,7 +5281,7 @@ task.spawn(function()
             ["Chase_FadeIn_Chase"] = {
                 ["DisplayDescription"] = "Smooth volume fade-in when entering Chase layer",
                 ["DisplayTitle"] = "Chase: Fade In",
-                ["LayoutOrder"] = 14,
+                ["LayoutOrder"] = 21,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = true,
@@ -3686,7 +5292,7 @@ task.spawn(function()
             ["Chase_FadeOut_Chase"] = {
                 ["DisplayDescription"] = "Smooth volume fade-out when exiting Chase layer",
                 ["DisplayTitle"] = "Chase: Fade Out",
-                ["LayoutOrder"] = 15,
+                ["LayoutOrder"] = 22,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = true,
@@ -3697,7 +5303,7 @@ task.spawn(function()
             ["Chase_DistChase"] = {
                 ["DisplayDescription"] = "Base distance threshold for active Chase (Layer 4) in studs",
                 ["DisplayTitle"] = "Base Distance: Chase",
-                ["LayoutOrder"] = 16,
+                ["LayoutOrder"] = 23,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 22,
@@ -3709,7 +5315,7 @@ task.spawn(function()
             ["Chase_HasLay3"] = {
                 ["DisplayDescription"] = "Enable or disable Layer 3 segment (Close Terror)",
                 ["DisplayTitle"] = "Enable: Layer 3 Segment",
-                ["LayoutOrder"] = 17,
+                ["LayoutOrder"] = 24,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false,
@@ -3721,7 +5327,7 @@ task.spawn(function()
             ["Chase_FadeIn_Lay3"] = {
                 ["DisplayDescription"] = "Smooth volume fade-in when entering Layer 3",
                 ["DisplayTitle"] = "Layer 3: Fade In",
-                ["LayoutOrder"] = 18,
+                ["LayoutOrder"] = 25,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = true,
@@ -3732,7 +5338,7 @@ task.spawn(function()
             ["Chase_FadeOut_Lay3"] = {
                 ["DisplayDescription"] = "Smooth volume fade-out when exiting Layer 3",
                 ["DisplayTitle"] = "Layer 3: Fade Out",
-                ["LayoutOrder"] = 19,
+                ["LayoutOrder"] = 26,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = true,
@@ -3743,7 +5349,7 @@ task.spawn(function()
             ["Chase_DistLay3"] = {
                 ["DisplayDescription"] = "Base distance threshold for Layer 3 (Close Terror) in studs",
                 ["DisplayTitle"] = "Base Distance: Layer 3",
-                ["LayoutOrder"] = 20,
+                ["LayoutOrder"] = 27,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 40,
@@ -3755,7 +5361,7 @@ task.spawn(function()
             ["Chase_HasLay2"] = {
                 ["DisplayDescription"] = "Enable or disable Layer 2 segment (Medium Terror)",
                 ["DisplayTitle"] = "Enable: Layer 2 Segment",
-                ["LayoutOrder"] = 21,
+                ["LayoutOrder"] = 28,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false,
@@ -3767,7 +5373,7 @@ task.spawn(function()
             ["Chase_FadeIn_Lay2"] = {
                 ["DisplayDescription"] = "Smooth volume fade-in when entering Layer 2",
                 ["DisplayTitle"] = "Layer 2: Fade In",
-                ["LayoutOrder"] = 22,
+                ["LayoutOrder"] = 29,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = true,
@@ -3778,7 +5384,7 @@ task.spawn(function()
             ["Chase_FadeOut_Lay2"] = {
                 ["DisplayDescription"] = "Smooth volume fade-out when exiting Layer 2",
                 ["DisplayTitle"] = "Layer 2: Fade Out",
-                ["LayoutOrder"] = 23,
+                ["LayoutOrder"] = 30,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = true,
@@ -3789,7 +5395,7 @@ task.spawn(function()
             ["Chase_DistLay2"] = {
                 ["DisplayDescription"] = "Base distance threshold for Layer 2 (Medium Terror) in studs",
                 ["DisplayTitle"] = "Base Distance: Layer 2",
-                ["LayoutOrder"] = 24,
+                ["LayoutOrder"] = 31,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 60,
@@ -3801,7 +5407,7 @@ task.spawn(function()
             ["Chase_HasLay1"] = {
                 ["DisplayDescription"] = "Enable or disable Layer 1 segment (Far Terror)",
                 ["DisplayTitle"] = "Enable: Layer 1 Segment",
-                ["LayoutOrder"] = 25,
+                ["LayoutOrder"] = 32,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false,
@@ -3813,7 +5419,7 @@ task.spawn(function()
             ["Chase_FadeIn_Lay1"] = {
                 ["DisplayDescription"] = "Smooth volume fade-in when entering Layer 1",
                 ["DisplayTitle"] = "Layer 1: Fade In",
-                ["LayoutOrder"] = 26,
+                ["LayoutOrder"] = 33,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = true,
@@ -3824,7 +5430,7 @@ task.spawn(function()
             ["Chase_FadeOut_Lay1"] = {
                 ["DisplayDescription"] = "Smooth volume fade-out when exiting Layer 1",
                 ["DisplayTitle"] = "Layer 1: Fade Out",
-                ["LayoutOrder"] = 27,
+                ["LayoutOrder"] = 34,
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = true,
@@ -3835,7 +5441,7 @@ task.spawn(function()
             ["Chase_DistLay1"] = {
                 ["DisplayDescription"] = "Base distance threshold for Layer 1 (Far Terror) in studs",
                 ["DisplayTitle"] = "Base Distance: Layer 1",
-                ["LayoutOrder"] = 28,
+                ["LayoutOrder"] = 35,
                 ["Savable"] = true,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 85,
@@ -3854,7 +5460,7 @@ task.spawn(function()
                 ["DisplayDescription"] = "Unlocks and builds the native in-game radial emote wheel for Killers",
                 ["DisplayTitle"] = "Unlock Killer Emotes",
                 ["LayoutOrder"] = 1,
-                ["Savable"] = true,
+                ["Savable"] = false,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = true,
                 ["ScriptFunction"] = function(self, val)
@@ -3879,7 +5485,7 @@ task.spawn(function()
                 ["DisplayDescription"] = "Allows walking and sprinting while emoting without canceling the animation",
                 ["DisplayTitle"] = "Emote Walk",
                 ["LayoutOrder"] = 3,
-                ["Savable"] = true,
+                ["Savable"] = false,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = true
             },
@@ -3887,7 +5493,7 @@ task.spawn(function()
                 ["DisplayDescription"] = "1337 Block",
                 ["DisplayTitle"] = '<stroke thickness="0.7">1337</stroke> Parry Anim Cancel',
                 ["LayoutOrder"] = 4,
-                ["Savable"] = true,
+                ["Savable"] = false,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false,
                 ["AnimConn"] = nil,
@@ -3946,16 +5552,16 @@ task.spawn(function()
             ["Fun_StaminaStopper"] = {
                 ["DisplayDescription"] = "Releases sprint button when stamina reaches threshold",
                 ["DisplayTitle"] = "Stamina Stopper",
-                ["LayoutOrder"] = 5,
-                ["Savable"] = true,
+                ["LayoutOrder"] = 10,
+                ["Savable"] = false,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false
             },
             ["Fun_StaminaThreshold"] = {
                 ["DisplayDescription"] = "Stamina cutoff threshold to release sprint",
                 ["DisplayTitle"] = "Stamina Threshold",
-                ["LayoutOrder"] = 6,
-                ["Savable"] = true,
+                ["LayoutOrder"] = 11,
+                ["Savable"] = false,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 15,
                 ["ExtraData"] = { ["MinValue"] = 1, ["MaxValue"] = 35, ["Step"] = 1 }
@@ -3963,11 +5569,69 @@ task.spawn(function()
             ["Fun_StaminaLockDuration"] = {
                 ["DisplayDescription"] = "Sprint button lock duration after release",
                 ["DisplayTitle"] = "Sprint Lock Duration",
-                ["LayoutOrder"] = 7,
-                ["Savable"] = true,
+                ["LayoutOrder"] = 12,
+                ["Savable"] = false,
                 ["InstanceType"] = "NumberValue",
                 ["DefaultInstanceValue"] = 2.0,
                 ["ExtraData"] = { ["MinValue"] = 0.5, ["MaxValue"] = 5.0, ["Step"] = 0.1 }
+            }
+        },
+
+        ["Fun_HDT"] = {
+            ["TabAttributes"] = {
+                ["DisplayTitle"] = "Fun: Hitbox Dragging Tech (1337)",
+                ["LayoutOrder"] = 103.5
+            },
+            ["Fun_HitboxDrag"] = {
+                ["DisplayDescription"] = "Drags your character toward the nearest killer while blocking as Guest 1337 to catch hits for parry",
+                ["DisplayTitle"] = "Hitbox Dragging Tech",
+                ["LayoutOrder"] = 1,
+                ["Savable"] = false,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function(self, val)
+                    if not val then
+                        HDT_StopDrag()
+                    elseif LocalPlayer.Character then
+                        HDT_HookCharacter(LocalPlayer.Character)
+                    end
+                end
+            },
+            ["Fun_HDT_Speed"] = {
+                ["DisplayDescription"] = "Horizontal dragging speed toward the killer",
+                ["DisplayTitle"] = "Dragging Speed",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = false,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 10,
+                ["ExtraData"] = { ["MinValue"] = 5, ["MaxValue"] = 25, ["Step"] = 1 }
+            },
+            ["Fun_HDT_StartDelay"] = {
+                ["DisplayDescription"] = "Delay in seconds before dragging starts after pressing Block",
+                ["DisplayTitle"] = "Start Delay (Seconds)",
+                ["LayoutOrder"] = 3,
+                ["Savable"] = false,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 0.0,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 2.0, ["Step"] = 0.05 }
+            },
+            ["Fun_HDT_Duration"] = {
+                ["DisplayDescription"] = "Active dragging window duration in seconds",
+                ["DisplayTitle"] = "Drag Duration (Seconds)",
+                ["LayoutOrder"] = 4,
+                ["Savable"] = false,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 0.4,
+                ["ExtraData"] = { ["MinValue"] = 0.1, ["MaxValue"] = 0.8, ["Step"] = 0.05 }
+            },
+            ["Fun_HDT_MaxRange"] = {
+                ["DisplayDescription"] = "Maximum distance in studs to drag toward a killer",
+                ["DisplayTitle"] = "Max Target Range (Studs)",
+                ["LayoutOrder"] = 5,
+                ["Savable"] = false,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 30,
+                ["ExtraData"] = { ["MinValue"] = 10, ["MaxValue"] = 60, ["Step"] = 2 }
             }
         },
 
@@ -3980,7 +5644,7 @@ task.spawn(function()
                 ["DisplayDescription"] = "The body part that the camera locks onto during an emote",
                 ["DisplayTitle"] = "Emote Camera",
                 ["LayoutOrder"] = 1,
-                ["Savable"] = true,
+                ["Savable"] = false,
                 ["InstanceType"] = "StringValue",
                 ["DefaultInstanceValue"] = "None",
                 ["ExtraData"] = { ["Options"] = "None|Head|Torso" },
@@ -3995,7 +5659,7 @@ task.spawn(function()
                 ["DisplayDescription"] = "Disables most of the visual effects for emotes",
                 ["DisplayTitle"] = "Emote VFX Disabled",
                 ["LayoutOrder"] = 2,
-                ["Savable"] = true,
+                ["Savable"] = false,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false,
                 ["ScriptFunction"] = function(self, val)
@@ -4009,7 +5673,7 @@ task.spawn(function()
                 ["DisplayDescription"] = "Disables emote sound effects and ambience",
                 ["DisplayTitle"] = "Emote SFX Disabled",
                 ["LayoutOrder"] = 3,
-                ["Savable"] = true,
+                ["Savable"] = false,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false,
                 ["ScriptFunction"] = function(self, val)
@@ -4023,7 +5687,7 @@ task.spawn(function()
                 ["DisplayDescription"] = "Hides the hands in certain emotes",
                 ["DisplayTitle"] = "Emote Hands Disabled",
                 ["LayoutOrder"] = 4,
-                ["Savable"] = true,
+                ["Savable"] = false,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false,
                 ["ScriptFunction"] = function(self, val)
@@ -4037,7 +5701,7 @@ task.spawn(function()
                 ["DisplayDescription"] = "Whether or not your own emotes will be affected by your preferred emote settings",
                 ["DisplayTitle"] = "Personal Emotes Affected",
                 ["LayoutOrder"] = 5,
-                ["Savable"] = true,
+                ["Savable"] = false,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false,
                 ["ScriptFunction"] = function(self, val)
@@ -4051,7 +5715,7 @@ task.spawn(function()
                 ["DisplayDescription"] = "Toggles automatic emote syncing with nearby players",
                 ["DisplayTitle"] = "Emote Syncing",
                 ["LayoutOrder"] = 6,
-                ["Savable"] = true,
+                ["Savable"] = false,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = true,
                 ["ScriptFunction"] = function(self, val)
@@ -4066,13 +5730,16 @@ task.spawn(function()
 
     HandleUIFeatures("Visual_Generators", AddonsPackage["Visual_Generators"])
     HandleUIFeatures("Visual_VeeGraffiti", AddonsPackage["Visual_VeeGraffiti"])
+    HandleUIFeatures("Visual_Projectiles", AddonsPackage["Visual_Projectiles"])
     HandleUIFeatures("Custom_LMS", AddonsPackage["Custom_LMS"])
     HandleUIFeatures("Custom_2v3", AddonsPackage["Custom_2v3"])
     HandleUIFeatures("Custom_LMS_Visuals", AddonsPackage["Custom_LMS_Visuals"])
     HandleUIFeatures("Custom_Chase", AddonsPackage["Custom_Chase"])
     HandleUIFeatures("Fun_Wheel", AddonsPackage["Fun_Wheel"])
+    HandleUIFeatures("Fun_HDT", AddonsPackage["Fun_HDT"])
     HandleUIFeatures("Fun_Settings", AddonsPackage["Fun_Settings"])
     HandleUIFeatures("Fun_Credits", AddonsPackage["Fun_Credits"])
+    InitFunSettingsPersistence()
 
     task.spawn(function()
         task.wait(0.2)
@@ -4082,6 +5749,8 @@ task.spawn(function()
     end)
     task.wait(0.1)
 
+    do
+    local function InitTabRail()
     local TWEEN = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
     local HOVER_TWEEN = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
     local CONE_OUT = TweenInfo.new(0.32, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
@@ -4280,9 +5949,9 @@ task.spawn(function()
         for _, item in ipairs(ContentsScrolling:GetChildren()) do
             if item:IsA("GuiObject") and not item:IsA("UIListLayout") and not item:IsA("UIPadding") and item ~= CanvasAutoSpacer then
                 local ownerTab = FastGetItemTab(item)
-                local isVisualItem = (ownerTab == "Visual_Generators" or ownerTab == "Visual_Camera" or ownerTab == "Visual_VeeGraffiti")
+                local isVisualItem = (ownerTab == "Visual_Generators" or ownerTab == "Visual_Camera" or ownerTab == "Visual_VeeGraffiti" or ownerTab == "Visual_Projectiles")
                 local isMusicItem = (ownerTab == "Custom_LMS" or ownerTab == "Custom_2v3" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase")
-                local isFunItem = (ownerTab == "Fun_Wheel" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
+                local isFunItem = (ownerTab == "Fun_Wheel" or ownerTab == "Fun_HDT" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
 
                 if tabKey == "Main" then
                     if isVisualItem or isMusicItem or isFunItem then
@@ -4508,7 +6177,7 @@ task.spawn(function()
         for _, item in ipairs(ContentsScrolling:GetChildren()) do
             if item:IsA("GuiObject") and not item:IsA("UIListLayout") and not item:IsA("UIPadding") and item ~= CanvasAutoSpacer then
                 local ownerTab = FastGetItemTab(item)
-                local isAddonItem = (ownerTab == "Visual_Generators" or ownerTab == "Visual_VeeGraffiti" or ownerTab == "Custom_LMS" or ownerTab == "Custom_2v3" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase" or ownerTab == "Fun_Wheel" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
+                local isAddonItem = (ownerTab == "Visual_Generators" or ownerTab == "Visual_VeeGraffiti" or ownerTab == "Visual_Projectiles" or ownerTab == "Custom_LMS" or ownerTab == "Custom_2v3" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase" or ownerTab == "Fun_Wheel" or ownerTab == "Fun_HDT" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
                 if not isAddonItem and SavedOriginalVisibility[item] == nil then
                     SavedOriginalVisibility[item] = item.Visible
                 end
@@ -4518,4 +6187,7 @@ task.spawn(function()
             OpenRailAnimation()
         end
     end)
+    end
+    InitTabRail()
+    end
 end)
