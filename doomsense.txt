@@ -1,4 +1,4 @@
--- by r3cup, doomsense  v1.3
+-- by r3cup, doomsense  v1.3.1
 
 task.spawn(function()
     _G.ForsakenPlus_CustomRailLoaded = true
@@ -655,6 +655,7 @@ task.spawn(function()
         end)
     end
 
+    local ForceBuildNativeEmoteMenu, ToggleNativeEmoteWheel, InitFunSettingsPersistence, SetEmoteSetting, BindEmoteSetting = (function()
     -- [ Native Emotes Memory Hook ]
     local EmotesModule = nil
     local function GetEmotesModule()
@@ -743,6 +744,14 @@ task.spawn(function()
         "Fun_HDT_StartDelay",
         "Fun_HDT_Duration",
         "Fun_HDT_MaxRange",
+        "Fun_KillerABS",
+        "Fun_KillerABS_BehindOnly",
+        "Fun_KillerABS_Range",
+        "Fun_KillerABS_Duration",
+        "Fun_KillerABS_FOV",
+        "Fun_KillerABS_TurnSpeed",
+        "Fun_KillerABS_Smoothness",
+        "Fun_KillerABS_SmoothReturn",
         "Fun_EmoteCamera",
         "Fun_EmoteVFXDisabled",
         "Fun_EmoteSFXDisabled",
@@ -928,6 +937,10 @@ task.spawn(function()
         end)
     end
 
+    return ForceBuildNativeEmoteMenu, ToggleNativeEmoteWheel, InitFunSettingsPersistence, SetEmoteSetting, BindEmoteSetting
+    end)()
+
+    local RegisterBudgetTask = (function()
     -- [ Stamina Stopper ]
     local ContextActionService = game:GetService("ContextActionService")
     local VirtualInputManager = game:GetService("VirtualInputManager")
@@ -1234,6 +1247,9 @@ task.spawn(function()
         task.delay(0.2, RehookStaminaChanged)
     end)
 
+    return RegisterBudgetTask
+    end)()
+
     -- [ ChaseThemes Game Hook ]
     local GameChaseThemes = nil
     local function GetChaseModule()
@@ -1252,6 +1268,7 @@ task.spawn(function()
     end
     GetChaseModule()
 
+    local TrackRegistry, initSurv, initKill, initChase, RefreshAudioDropdowns, ResolveTrack = (function()
     -- [ Track Registry & Scanner ]
     local TrackRegistry = { Survivor = {}, Killer = {}, Chase = {} }
 
@@ -1490,6 +1507,10 @@ task.spawn(function()
         return nil
     end
 
+    return TrackRegistry, initSurv, initKill, initChase, RefreshAudioDropdowns, ResolveTrack
+    end)()
+
+    local DetectRole, ResolveEntity = (function()
     -- [ 2D Visual Identity Database ]
     local CHAR_DATA = {
         ["nosferatu"]    = { Name = "Nosferatu",  Asset = "73910004346494" },
@@ -1606,6 +1627,10 @@ task.spawn(function()
         end
     end
 
+    return DetectRole, ResolveEntity
+    end)()
+
+    local StartVisuals, StopLMS, CheckTrueLMS = (function()
     -- [ Visual FX Container ]
     local FX_Gui = nil
     local function GetFXGui()
@@ -2385,6 +2410,12 @@ task.spawn(function()
         end
     end
 
+    return StartVisuals, StopLMS, CheckTrueLMS
+    end)()
+
+    local AutoConfigApplying = false
+    local LastAutoConfigTrack = nil
+    local StopChaseAudio, LoadTrackConfig, OnChaseSettingModified, SyncChaseAudio, RefreshChaseDropdowns = (function()
     -- [ Custom Chase Engine ]
     local WasInLobbyState = true
     local StopChaseAudio = nil
@@ -2472,8 +2503,8 @@ task.spawn(function()
     end
 
     local IsConfigLoading = false
-    local AutoConfigApplying = false
-    local LastAutoConfigTrack = nil
+    AutoConfigApplying = false
+    LastAutoConfigTrack = nil
 
     local function GetCurrentRoleTrack()
         if IsLocalKiller() then
@@ -2506,7 +2537,8 @@ task.spawn(function()
             end
 
             if sId == "119534053591457" or sId == "103787320067609" or sId == "77452944283813" or sId == "125186256017278"
-                or sId == "88010225019310" or sId == "79556846831205" or sId == "71846364767798" or sId == "82229037343524" then
+                or sId == "88010225019310" or sId == "79556846831205" or sId == "71846364767798" or sId == "82229037343524"
+                or sId == "80943093556456" or sId == "139713790799526" then
                 return true
             end
         end
@@ -3802,10 +3834,14 @@ task.spawn(function()
         RefreshAudioDropdowns(notify)
     end
 
+    return StopChaseAudio, LoadTrackConfig, OnChaseSettingModified, SyncChaseAudio, RefreshChaseDropdowns
+    end)()
+
     pcall(function()
         RunService:UnbindFromRenderStep("FPlus_NightStudioEnforcer")
     end)
 
+    local ClearProjectileESP = (function()
     -- [ Generator ]
     local GenWorldBars = {}
     local CachedGenerators = {}
@@ -4177,6 +4213,59 @@ task.spawn(function()
         return ProjRepModule, ProjMathModule
     end
 
+    local ProjContainer = nil
+
+    local function GetProjContainer()
+        if not ProjContainer or not ProjContainer.Parent then
+            ProjContainer = Instance.new("Folder")
+            ProjContainer.Name = "FPlus_ProjESP_Container"
+            ProjContainer.Parent = workspace
+        end
+        return ProjContainer
+    end
+
+    local function DoesProjectileBreakOnWall(proj)
+        local grav = tonumber(proj.Gravity) or 0
+        local modelName = (typeof(proj.Model) == "Instance" and proj.Model.Name or ""):lower()
+
+        if math.abs(grav) > 0.05 then
+            return true
+        end
+
+        if modelName ~= "" then
+            if modelName:find("shockwave")
+                or modelName:find("swords")
+                or modelName:find("entanglement")
+                or modelName:find("massinfection")
+                or modelName:find("corrupt")
+                or modelName:find("brick")
+                or modelName:find("pizza")
+                or modelName:find("plasma")
+                or modelName:find("beam") then
+                return false
+            end
+
+            if modelName:find("bulb")
+                or modelName:find("crystal")
+                or modelName:find("nova")
+                or modelName:find("star")
+                or modelName:find("bomb")
+                or modelName:find("orb")
+                or modelName:find("grenade")
+                or modelName:find("rock")
+                or modelName:find("pumpkin")
+                or modelName:find("snowball") then
+                return true
+            end
+        end
+
+        if type(proj.Callbacks) == "table" and proj.Callbacks.HitOther ~= nil then
+            return true
+        end
+
+        return false
+    end
+
     local function ClearProjectileESP()
         for key, entry in pairs(ActiveProjVisuals) do
             if entry and entry.Folder and entry.Folder.Parent then
@@ -4184,6 +4273,10 @@ task.spawn(function()
             end
         end
         table.clear(ActiveProjVisuals)
+        if ProjContainer and ProjContainer.Parent then
+            ProjContainer:Destroy()
+        end
+        ProjContainer = nil
     end
 
     local function EvalProjPos(t, initPos, initVel, grav, mathMod)
@@ -4215,7 +4308,7 @@ task.spawn(function()
     local function UpdateProjectileESP()
         local enabled = GetValue("ProjESP_Enabled")
         if not enabled or IsInLobby() then
-            if next(ActiveProjVisuals) ~= nil then
+            if next(ActiveProjVisuals) ~= nil or ProjContainer ~= nil then
                 ClearProjectileESP()
             end
             return
@@ -4243,7 +4336,7 @@ task.spawn(function()
                     local initVel = proj.InitialVelocity
                     local grav = tonumber(proj.Gravity) or 0
                     local isCurved = math.abs(grav) > 0.05
-                    local segCount = isCurved and 6 or 1
+                    local segCount = isCurved and 10 or 1
                     local thickness = GetProjectileThickness(proj)
 
                     local curPos = initPos
@@ -4265,7 +4358,7 @@ task.spawn(function()
 
                         local folder = Instance.new("Folder")
                         folder.Name = "FPlus_ProjESP_" .. tostring(key)
-                        folder.Parent = workspace
+                        folder.Parent = GetProjContainer()
 
                         local segs = {}
                         for i = 1, segCount do
@@ -4293,6 +4386,31 @@ task.spawn(function()
                             segs[i] = { Part = part, Adorn = adorn }
                         end
 
+                        local endPart = Instance.new("Part")
+                        endPart.Name = "Endpoint"
+                        endPart.Anchored = true
+                        endPart.CanCollide = false
+                        endPart.CanQuery = false
+                        endPart.CanTouch = false
+                        endPart.CastShadow = false
+                        endPart.Shape = Enum.PartType.Ball
+                        endPart.Material = Enum.Material.Plastic
+                        endPart.Size = Vector3.new(1.2, 1.2, 1.2)
+                        endPart.Transparency = 1
+                        endPart.Color = espColor
+                        endPart.Parent = folder
+
+                        local endAdorn = Instance.new("SphereHandleAdornment")
+                        endAdorn.Name = "EndDot"
+                        endAdorn.AlwaysOnTop = true
+                        endAdorn.ZIndex = 11
+                        endAdorn.Transparency = 0.2
+                        endAdorn.Color3 = espColor
+                        endAdorn.Radius = 0.65
+                        endAdorn.Visible = false
+                        endAdorn.Adornee = endPart
+                        endAdorn.Parent = endPart
+
                         local hl = Instance.new("Highlight")
                         hl.Name = "ModelHL"
                         hl.FillColor = espColor
@@ -4302,7 +4420,7 @@ task.spawn(function()
                         hl.Enabled = false
                         hl.Parent = folder
 
-                        entry = { Folder = folder, Segments = segs, Highlight = hl }
+                        entry = { Folder = folder, Segments = segs, Highlight = hl, Endpoint = { Part = endPart, Adorn = endAdorn } }
                         ActiveProjVisuals[key] = entry
                     end
 
@@ -4317,27 +4435,78 @@ task.spawn(function()
                         end
                     end
 
+                    local canBreak = DoesProjectileBreakOnWall(proj)
+                    local rayParams = nil
+                    if canBreak then
+                        rayParams = RaycastParams.new()
+                        rayParams.FilterType = Enum.RaycastFilterType.Exclude
+                        rayParams.RespectCanCollide = true
+                        pcall(function() rayParams.CollisionGroup = "Killers" end)
+                        local filterList = { GetProjContainer() }
+                        local pFld = workspace:FindFirstChild("Players")
+                        if pFld then table.insert(filterList, pFld) end
+                        local hFld = workspace:FindFirstChild("Hitboxes")
+                        if hFld then table.insert(filterList, hFld) end
+                        local rFld = workspace:FindFirstChild("Ragdolls")
+                        if rFld then table.insert(filterList, rFld) end
+                        if typeof(proj.Model) == "Instance" then table.insert(filterList, proj.Model) end
+                        rayParams.FilterDescendantsInstances = filterList
+                    end
+
+                    local hitPoint = nil
                     local stepSec = previewSec / segCount
                     for i = 1, segCount do
                         local seg = entry.Segments[i]
-                        local sA = (i - 1) * stepSec
-                        local sB = i * stepSec
-                        local pA = curPos + (EvalProjPos(tBase + sA, initPos, initVel, grav, mathMod) - pBase)
-                        local pB = curPos + (EvalProjPos(tBase + sB, initPos, initVel, grav, mathMod) - pBase)
-                        local len = (pB - pA).Magnitude
-
-                        if len > 0.05 then
-                            local sz = Vector3.new(thickness, thickness, len)
-                            seg.Part.Size = sz
-                            seg.Part.CFrame = CFrame.lookAt(pA, pB) * CFrame.new(0, 0, -len * 0.5)
-                            seg.Part.Color = espColor
-                            seg.Part.Transparency = 0.65
-                            seg.Adorn.Size = sz
-                            seg.Adorn.Color3 = espColor
-                            seg.Adorn.Visible = true
-                        else
+                        if hitPoint then
                             seg.Part.Transparency = 1
                             seg.Adorn.Visible = false
+                        else
+                            local sA = (i - 1) * stepSec
+                            local sB = i * stepSec
+                            local pA = curPos + (EvalProjPos(tBase + sA, initPos, initVel, grav, mathMod) - pBase)
+                            local pB = curPos + (EvalProjPos(tBase + sB, initPos, initVel, grav, mathMod) - pBase)
+
+                            if rayParams then
+                                local dir = pB - pA
+                                if dir.Magnitude > 0.05 then
+                                    local hit = workspace:Raycast(pA, dir, rayParams)
+                                    if hit then
+                                        pB = hit.Position
+                                        hitPoint = hit.Position
+                                    end
+                                end
+                            end
+
+                            local len = (pB - pA).Magnitude
+                            if len > 0.05 then
+                                local sz = Vector3.new(thickness, thickness, len)
+                                seg.Part.Size = sz
+                                seg.Part.CFrame = CFrame.lookAt(pA, pB) * CFrame.new(0, 0, -len * 0.5)
+                                seg.Part.Color = espColor
+                                seg.Part.Transparency = 0.65
+                                seg.Adorn.Size = sz
+                                seg.Adorn.Color3 = espColor
+                                seg.Adorn.Visible = true
+                            else
+                                seg.Part.Transparency = 1
+                                seg.Adorn.Visible = false
+                            end
+                        end
+                    end
+
+                    if entry.Endpoint and entry.Endpoint.Part and entry.Endpoint.Adorn then
+                        if hitPoint then
+                            local dotR = math.clamp(thickness * 0.75, 0.6, 2.2)
+                            entry.Endpoint.Part.Size = Vector3.new(dotR * 2, dotR * 2, dotR * 2)
+                            entry.Endpoint.Part.CFrame = CFrame.new(hitPoint)
+                            entry.Endpoint.Part.Color = espColor
+                            entry.Endpoint.Part.Transparency = 0.5
+                            entry.Endpoint.Adorn.Radius = dotR
+                            entry.Endpoint.Adorn.Color3 = espColor
+                            entry.Endpoint.Adorn.Visible = true
+                        else
+                            entry.Endpoint.Part.Transparency = 1
+                            entry.Endpoint.Adorn.Visible = false
                         end
                     end
                 end
@@ -4356,6 +4525,10 @@ task.spawn(function()
 
     RegisterBudgetTask("Projectiles", UpdateProjectileESP)
 
+    return ClearProjectileESP
+    end)()
+
+    local HDT_StopDrag, HDT_HookCharacter = (function()
     -- [ Hitbox Dragging Tech (Guest 1337) ]
     local HDT_State = {
         IsDragging = false,
@@ -4681,6 +4854,350 @@ task.spawn(function()
         task.spawn(HDT_HookCharacter, LocalPlayer.Character)
     end
 
+    return HDT_StopDrag, HDT_HookCharacter
+    end)()
+
+    local SyncKillerDefenseHooks = (function()
+    -- [ Killer Anti-Backstab ]
+    local KillerABS = {
+        Anims = { ["100725497418533"] = true, ["89448354637442"] = true, ["115194624791339"] = true },
+        Sounds = { ["134932463887703"] = true, ["101489994047160"] = true },
+        CatalogReady = false,
+        HookedModels = {},
+        FolderConn = nil,
+        Locking = false,
+        Returning = false,
+        LockSeq = 0,
+        PrevAutoRotate = true,
+        SavedLookXZ = nil,
+        DeadZoneSide = 1,
+    }
+
+    local function GetLiveSurvivorsFolder()
+        local p = workspace:FindFirstChild("Players")
+        return (p and p:FindFirstChild("Survivors")) or SurvivorsFolder
+    end
+
+    local function KillerABS_BuildCatalog()
+        if KillerABS.CatalogReady then return end
+        KillerABS.CatalogReady = true
+        local function scan(val, tbl, depth)
+            if (depth or 0) > 3 or val == nil then return end
+            if type(val) == "string" or type(val) == "number" then
+                local id = tostring(val):match("%d+")
+                if id then tbl[id] = true end
+            elseif typeof(val) == "Instance" and (val:IsA("Animation") or val:IsA("Sound")) then
+                local id = tostring(val:IsA("Animation") and val.AnimationId or val.SoundId):match("%d+")
+                if id then tbl[id] = true end
+            elseif type(val) == "table" then
+                for _, v in pairs(val) do scan(v, tbl, (depth or 0) + 1) end
+            end
+        end
+        local function readCfg(cfg)
+            if not (cfg and cfg:IsA("ModuleScript")) then return end
+            local ok, m = pcall(require, cfg)
+            if not (ok and type(m) == "table") then return end
+            if type(m.Animations) == "table" then
+                for k, v in pairs(m.Animations) do
+                    local kl = tostring(k):lower()
+                    if kl:find("stab") or kl:find("lunge") or kl:find("dagger") then
+                        scan(v, KillerABS.Anims, 0)
+                    end
+                end
+            end
+            if type(m.Sounds) == "table" then
+                for k, v in pairs(m.Sounds) do
+                    local kl = tostring(k):lower()
+                    if kl:find("stab") or kl:find("lunge") or kl:find("dagger") then
+                        scan(v, KillerABS.Sounds, 0)
+                    end
+                end
+            end
+        end
+        pcall(function()
+            local tt = SurvivorAssets and (SurvivorAssets:FindFirstChild("TwoTime") or SurvivorAssets:FindFirstChild("!TwoTime"))
+            if tt then readCfg(tt:FindFirstChild("Config")) end
+            local sk = SkinsAssets and SkinsAssets:FindFirstChild("Survivors")
+            local ttSk = sk and (sk:FindFirstChild("TwoTime") or sk:FindFirstChild("!TwoTime"))
+            if ttSk then
+                for _, c in ipairs(ttSk:GetDescendants()) do
+                    if c:IsA("ModuleScript") and c.Name == "Config" then readCfg(c) end
+                end
+            end
+        end)
+    end
+
+    local function GetKillerABSReturnDir(myHum)
+        local uis = game:GetService("UserInputService")
+        if uis.MouseBehavior == Enum.MouseBehavior.LockCenter and workspace.CurrentCamera then
+            local clv = workspace.CurrentCamera.CFrame.LookVector
+            local flat = Vector3.new(clv.X, 0, clv.Z)
+            if flat.Magnitude > 0.05 then return flat.Unit end
+        elseif myHum and myHum.Parent and myHum.MoveDirection.Magnitude > 0.05 then
+            local flat = Vector3.new(myHum.MoveDirection.X, 0, myHum.MoveDirection.Z)
+            if flat.Magnitude > 0.05 then return flat.Unit end
+        end
+        return KillerABS.SavedLookXZ
+    end
+
+    local function StepKillerABSYaw(myRoot, targetDir, dt)
+        local p = myRoot.Position
+        local lv = myRoot.CFrame.LookVector
+        local curFlat = Vector3.new(lv.X, 0, lv.Z)
+        if curFlat.Magnitude < 0.01 then
+            curFlat = Vector3.new(0, 0, -1)
+        else
+            curFlat = curFlat.Unit
+        end
+
+        local diff = math.atan2(curFlat:Cross(targetDir).Y, curFlat:Dot(targetDir))
+        if math.abs(diff) < 0.004 then
+            myRoot.CFrame = CFrame.lookAt(p, p + targetDir)
+            return true
+        end
+
+        local dtClamped = math.clamp(dt or 0.016, 0.001, 0.1)
+        local turnSpeed = math.clamp(tonumber(GetValue("Fun_KillerABS_TurnSpeed")) or 800, 60, 3600)
+        local smoothness = math.clamp(tonumber(GetValue("Fun_KillerABS_Smoothness")) or 0.35, 0, 1)
+        local maxStep = math.rad(turnSpeed) * dtClamped
+
+        local step
+        if smoothness <= 0.01 then
+            step = math.clamp(diff, -maxStep, maxStep)
+        else
+            local rate = 28 - smoothness * 22
+            local expStep = diff * (1 - math.exp(-rate * dtClamped))
+            step = math.clamp(expStep, -maxStep, maxStep)
+        end
+
+        local newDir = CFrame.Angles(0, step, 0) * curFlat
+        local flatNew = Vector3.new(newDir.X, 0, newDir.Z)
+        if flatNew.Magnitude > 0.001 then
+            flatNew = flatNew.Unit
+            myRoot.CFrame = CFrame.lookAt(p, p + flatNew)
+        end
+
+        return math.abs(diff - step) < 0.004
+    end
+
+    local function ComputeKillerABSFovTarget(myRoot, dirToTT)
+        local fovDeg = math.clamp(tonumber(GetValue("Fun_KillerABS_FOV")) or 35, 0, 70)
+        local fovRad = math.rad(fovDeg)
+        if fovRad <= 0.005 then
+            return dirToTT
+        end
+
+        local lv = myRoot.CFrame.LookVector
+        local curFlat = Vector3.new(lv.X, 0, lv.Z)
+        if curFlat.Magnitude < 0.01 then
+            curFlat = Vector3.new(0, 0, -1)
+        else
+            curFlat = curFlat.Unit
+        end
+
+        local angle = math.acos(math.clamp(curFlat:Dot(dirToTT), -1, 1))
+        if angle <= fovRad then
+            return curFlat
+        end
+
+        local sideAngle = math.atan2(dirToTT:Cross(curFlat).Y, dirToTT:Dot(curFlat))
+        local sideSign
+        if math.abs(sideAngle) > 0.05 and math.abs(math.abs(sideAngle) - math.pi) > 0.05 then
+            sideSign = (sideAngle >= 0) and 1 or -1
+        else
+            sideSign = KillerABS.DeadZoneSide or 1
+        end
+
+        local offsetDir = CFrame.Angles(0, sideSign * fovRad, 0) * dirToTT
+        return Vector3.new(offsetDir.X, 0, offsetDir.Z).Unit
+    end
+
+    local function KillerABS_Release(myChar, myRoot, myHum)
+        pcall(function() RunService:UnbindFromRenderStep("FPlus_KillerABS_Yaw") end)
+        KillerABS.Returning = false
+        if not KillerABS.Locking then return end
+        KillerABS.Locking = false
+
+        if myRoot and myRoot.Parent and myHum and myHum.Parent then
+            local returnDir = GetKillerABSReturnDir(myHum)
+            if returnDir and returnDir.Magnitude > 0.05 then
+                local p = myRoot.Position
+                myRoot.CFrame = CFrame.lookAt(p, p + returnDir)
+            end
+            myHum.AutoRotate = (KillerABS.PrevAutoRotate ~= false)
+        end
+        KillerABS.SavedLookXZ = nil
+    end
+
+    local function KillerABS_Trigger(ttModel)
+        if not GetValue("Fun_KillerABS") or not IsLocalKiller() then return end
+        local myChar = LocalPlayer.Character
+        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+        local ttRoot = ttModel and ttModel:FindFirstChild("HumanoidRootPart")
+        if not (myRoot and myHum and ttRoot) or myHum.Health <= 0 then return end
+        if myChar:GetAttribute("Stunned") or myChar:GetAttribute("Executing") then return end
+
+        local range = tonumber(GetValue("Fun_KillerABS_Range")) or 34
+        local delta = ttRoot.Position - myRoot.Position
+        if delta.Magnitude > range then return end
+
+        local flatDelta = Vector3.new(delta.X, 0, delta.Z)
+        if flatDelta.Magnitude > 0.1 and GetValue("Fun_KillerABS_BehindOnly") then
+            if myRoot.CFrame.LookVector:Dot(flatDelta.Unit) > 0.35 then return end
+        end
+
+        if not KillerABS.Locking then
+            KillerABS.PrevAutoRotate = myHum.AutoRotate
+            local lv = myRoot.CFrame.LookVector
+            local flat = Vector3.new(lv.X, 0, lv.Z)
+            KillerABS.SavedLookXZ = (flat.Magnitude > 0.05) and flat.Unit or Vector3.new(0, 0, -1)
+            if flatDelta.Magnitude > 0.05 then
+                local side = math.atan2(flatDelta.Unit:Cross(KillerABS.SavedLookXZ).Y, flatDelta.Unit:Dot(KillerABS.SavedLookXZ))
+                KillerABS.DeadZoneSide = (side >= 0) and 1 or -1
+            else
+                KillerABS.DeadZoneSide = 1
+            end
+        end
+
+        KillerABS.LockSeq = KillerABS.LockSeq + 1
+        local mySeq = KillerABS.LockSeq
+        KillerABS.Locking = true
+        KillerABS.Returning = false
+        myHum.AutoRotate = false
+
+        local dur = math.clamp(tonumber(GetValue("Fun_KillerABS_Duration")) or 0.65, 0.15, 1.5)
+        local deadline = os.clock() + dur
+        local returnDeadline = 0
+
+        pcall(function() RunService:UnbindFromRenderStep("FPlus_KillerABS_Yaw") end)
+        -- Character
+        RunService:BindToRenderStep("FPlus_KillerABS_Yaw", Enum.RenderPriority.Character.Value + 5, function(dt)
+            if KillerABS.LockSeq ~= mySeq
+                or not GetValue("Fun_KillerABS") or not IsLocalKiller()
+                or LocalPlayer.Character ~= myChar or not myRoot.Parent
+                or myHum.Health <= 0 or myChar:GetAttribute("Stunned") then
+                KillerABS_Release(myChar, myRoot, myHum)
+                return
+            end
+
+            if not KillerABS.Returning then
+                if os.clock() >= deadline or not ttRoot.Parent then
+                    if GetValue("Fun_KillerABS_SmoothReturn") ~= false then
+                        KillerABS.Returning = true
+                        returnDeadline = os.clock() + 0.85
+                    else
+                        KillerABS_Release(myChar, myRoot, myHum)
+                        return
+                    end
+                else
+                    local p = myRoot.Position
+                    local tp = ttRoot.Position
+                    local flat = Vector3.new(tp.X - p.X, 0, tp.Z - p.Z)
+                    if flat.Magnitude > 0.05 then
+                        myHum.AutoRotate = false
+                        local targetDir = ComputeKillerABSFovTarget(myRoot, flat.Unit)
+                        StepKillerABSYaw(myRoot, targetDir, dt)
+                    end
+                end
+            else
+                local rDir = GetKillerABSReturnDir(myHum)
+                if not rDir or os.clock() >= returnDeadline then
+                    KillerABS_Release(myChar, myRoot, myHum)
+                    return
+                end
+                myHum.AutoRotate = false
+                if StepKillerABSYaw(myRoot, rDir, dt) then
+                    KillerABS_Release(myChar, myRoot, myHum)
+                end
+            end
+        end)
+    end
+
+    local function KillerABS_IsTwoTime(m)
+        if not (m and m:IsA("Model")) then return false end
+        local dName = tostring(m:GetAttribute("ActorDisplayName") or m:GetAttribute("Character") or m.Name):lower():gsub("%s+", "")
+        return dName:find("twotime") ~= nil
+    end
+
+    local function KillerABS_HookModel(m)
+        if KillerABS.HookedModels[m] or not KillerABS_IsTwoTime(m) then return end
+        local conns = {}
+        KillerABS.HookedModels[m] = conns
+
+        local function drop()
+            KillerABS.HookedModels[m] = nil
+            for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+        end
+        table.insert(conns, m.AncestryChanged:Connect(function()
+            local sv = GetLiveSurvivorsFolder()
+            if not sv or not m:IsDescendantOf(sv) then drop() end
+        end))
+
+        task.spawn(function()
+            local hum = m:FindFirstChildOfClass("Humanoid") or m:WaitForChild("Humanoid", 4)
+            local anim = hum and (hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 4))
+            if not (anim and KillerABS.HookedModels[m] == conns) then return end
+            table.insert(conns, anim.AnimationPlayed:Connect(function(tr)
+                if not GetValue("Fun_KillerABS") then return end
+                local id = tr.Animation and tostring(tr.Animation.AnimationId):match("%d+")
+                if id and KillerABS.Anims[id] then KillerABS_Trigger(m) end
+            end))
+        end)
+
+        local function hookSnd(d)
+            if not d:IsA("Sound") then return end
+            local function chk()
+                if not GetValue("Fun_KillerABS") then return end
+                local id = tostring(d.SoundId or ""):match("%d+")
+                if id and KillerABS.Sounds[id] then KillerABS_Trigger(m) end
+            end
+            table.insert(conns, d.Played:Connect(chk))
+            table.insert(conns, d:GetPropertyChangedSignal("IsPlaying"):Connect(function() if d.IsPlaying then chk() end end))
+        end
+        for _, d in ipairs(m:GetDescendants()) do hookSnd(d) end
+        table.insert(conns, m.DescendantAdded:Connect(hookSnd))
+    end
+
+    local function SyncKillerDefenseHooks()
+        local needABS = GetValue("Fun_KillerABS") == true
+        if needABS then
+            KillerABS_BuildCatalog()
+            local sv = GetLiveSurvivorsFolder()
+            if sv then
+                for _, s in ipairs(sv:GetChildren()) do
+                    KillerABS_HookModel(s)
+                end
+                if not KillerABS.FolderConn then
+                    KillerABS.FolderConn = sv.ChildAdded:Connect(function(s)
+                        task.wait(0.1)
+                        if GetValue("Fun_KillerABS") then
+                            KillerABS_HookModel(s)
+                        end
+                    end)
+                end
+            end
+        else
+            if KillerABS.FolderConn then
+                KillerABS.FolderConn:Disconnect()
+                KillerABS.FolderConn = nil
+            end
+            for m, conns in pairs(KillerABS.HookedModels) do
+                for _, c in ipairs(conns) do
+                    pcall(function() c:Disconnect() end)
+                end
+                KillerABS.HookedModels[m] = nil
+            end
+            local myChar = LocalPlayer.Character
+            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+            KillerABS_Release(myChar, myRoot, myHum)
+        end
+    end
+
+    return SyncKillerDefenseHooks
+    end)()
+
     -- [ UI Package Definition ]
     local AddonsPackage = {
         ["Visual_Generators"] = {
@@ -4962,7 +5479,64 @@ task.spawn(function()
                 ["Savable"] = true,
                 ["InstanceType"] = "StringValue",
                 ["DefaultInstanceValue"] = "None",
-                ["ExtraData"] = { ["Options"] = "None|DOD|Pizza Tower|FNF" }
+                ["ExtraData"] = { ["Options"] = "None|DOD|Pizza Tower|FNF" },
+                ["SavedSkipLMSSetting"] = nil,
+                ["SkipLMSHooked"] = false,
+                ["SyncSkipLMSEffect"] = function(self, selectedVal)
+                    local shouldSkipOriginal = (selectedVal ~= nil and selectedVal ~= "None")
+                    task.spawn(function()
+                        local s = PlayerData and (PlayerData:FindFirstChild("Settings") or PlayerData:WaitForChild("Settings", 10))
+                        local g = s and (s:FindFirstChild("Game") or s:WaitForChild("Game", 10))
+                        local obj = g and (g:FindFirstChild("SkipLMSEffect") or g:WaitForChild("SkipLMSEffect", 10))
+                        if not (obj and obj:IsA("BoolValue")) then return end
+
+                        local function syncInitValue(stateVal)
+                            if not GetValue("require") then return end
+                            pcall(function()
+                                local initMod = ReplicatedStorage:FindFirstChild("Initializer")
+                                local initTbl = initMod and require(initMod)
+                                if initTbl and initTbl.PlayerSettings and initTbl.PlayerSettings.SkipLMSEffect then
+                                    initTbl.PlayerSettings.SkipLMSEffect.Value = stateVal
+                                end
+                            end)
+                        end
+
+                        if not self.SkipLMSHooked then
+                            self.SkipLMSHooked = true
+                            obj:GetPropertyChangedSignal("Value"):Connect(function()
+                                local curEff = GetValue("LMS_StartEffect")
+                                if curEff and curEff ~= "None" and obj.Value ~= true then
+                                    task.defer(function()
+                                        local latestEff = GetValue("LMS_StartEffect")
+                                        if latestEff and latestEff ~= "None" and obj.Parent and obj.Value ~= true then
+                                            obj.Value = true
+                                            syncInitValue(true)
+                                        end
+                                    end)
+                                end
+                            end)
+                        end
+
+                        if shouldSkipOriginal then
+                            if self.SavedSkipLMSSetting == nil then
+                                self.SavedSkipLMSSetting = obj.Value
+                            end
+                            if obj.Value ~= true then
+                                obj.Value = true
+                            end
+                            syncInitValue(true)
+                        else
+                            if self.SavedSkipLMSSetting ~= nil then
+                                obj.Value = self.SavedSkipLMSSetting
+                                syncInitValue(self.SavedSkipLMSSetting)
+                                self.SavedSkipLMSSetting = nil
+                            end
+                        end
+                    end)
+                end,
+                ["ScriptFunction"] = function(self, val)
+                    self:SyncSkipLMSEffect(val)
+                end
             },
             ["LMS_TestFX"] = {
                 ["DisplayDescription"] = "Preview the selected start intro effect immediately",
@@ -5019,7 +5593,45 @@ task.spawn(function()
                 ["Savable"] = true,
                 ["InstanceType"] = "BoolValue",
                 ["DefaultInstanceValue"] = false,
+                ["SavedCountdownSetting"] = nil,
+                ["CountdownHooked"] = false,
+                ["SyncCountdownSetting"] = function(self, enabled)
+                    task.spawn(function()
+                        local s = PlayerData and (PlayerData:FindFirstChild("Settings") or PlayerData:WaitForChild("Settings", 10))
+                        local a = s and (s:FindFirstChild("Audio") or s:WaitForChild("Audio", 10))
+                        local obj = a and (a:FindFirstChild("DisableCountdownTheme") or a:WaitForChild("DisableCountdownTheme", 10))
+                        if not (obj and obj:IsA("BoolValue")) then return end
+
+                        if not self.CountdownHooked then
+                            self.CountdownHooked = true
+                            obj:GetPropertyChangedSignal("Value"):Connect(function()
+                                if GetValue("Chase_Active") and obj.Value ~= true then
+                                    task.defer(function()
+                                        if GetValue("Chase_Active") and obj.Parent and obj.Value ~= true then
+                                            obj.Value = true
+                                        end
+                                    end)
+                                end
+                            end)
+                        end
+
+                        if enabled then
+                            if self.SavedCountdownSetting == nil then
+                                self.SavedCountdownSetting = obj.Value
+                            end
+                            if obj.Value ~= true then
+                                obj.Value = true
+                            end
+                        else
+                            if self.SavedCountdownSetting ~= nil then
+                                obj.Value = self.SavedCountdownSetting
+                                self.SavedCountdownSetting = nil
+                            end
+                        end
+                    end)
+                end,
                 ["ScriptFunction"] = function(self, val)
+                    self:SyncCountdownSetting(val == true)
                     if not val then
                         StopChaseAudio(false)
                     else
@@ -5635,6 +6247,83 @@ task.spawn(function()
             }
         },
 
+        ["Fun_KillerDefense"] = {
+            ["TabAttributes"] = {
+                ["DisplayTitle"] = "Fun: Killer Anti-Backstab",
+                ["LayoutOrder"] = 103.7
+            },
+            ["Fun_KillerABS"] = {
+                ["DisplayDescription"] = "Killer Only: Turns model yaw toward Two Time on backstab without locking controls, then returns back",
+                ["DisplayTitle"] = "Anti-Backstab (Killer Only)",
+                ["LayoutOrder"] = 1,
+                ["Savable"] = false,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = false,
+                ["ScriptFunction"] = function() SyncKillerDefenseHooks() end
+            },
+            ["Fun_KillerABS_BehindOnly"] = {
+                ["DisplayDescription"] = "Only trigger yaw turn if Two Time is behind or flanking you",
+                ["DisplayTitle"] = "Only From Behind / Side",
+                ["LayoutOrder"] = 2,
+                ["Savable"] = false,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true
+            },
+            ["Fun_KillerABS_Range"] = {
+                ["DisplayDescription"] = "Max detection distance for Two Time stab",
+                ["DisplayTitle"] = "ABS Detection Range",
+                ["LayoutOrder"] = 3,
+                ["Savable"] = false,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 34,
+                ["ExtraData"] = { ["MinValue"] = 10, ["MaxValue"] = 60, ["Step"] = 2 }
+            },
+            ["Fun_KillerABS_Duration"] = {
+                ["DisplayDescription"] = "How long to hold facing toward Two Time before returning",
+                ["DisplayTitle"] = "ABS Turn Duration (s)",
+                ["LayoutOrder"] = 4,
+                ["Savable"] = false,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 0.65,
+                ["ExtraData"] = { ["MinValue"] = 0.15, ["MaxValue"] = 1.5, ["Step"] = 0.05 }
+            },
+            ["Fun_KillerABS_FOV"] = {
+                ["DisplayDescription"] = "Angular FOV cone offset (degrees) so the killer does not stare directly at Two Time (0 = direct lock)",
+                ["DisplayTitle"] = "ABS Look Offset FOV (deg)",
+                ["LayoutOrder"] = 5,
+                ["Savable"] = false,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 35,
+                ["ExtraData"] = { ["MinValue"] = 0, ["MaxValue"] = 70, ["Step"] = 1 }
+            },
+            ["Fun_KillerABS_TurnSpeed"] = {
+                ["DisplayDescription"] = "Maximum yaw rotation speed in degrees per second",
+                ["DisplayTitle"] = "ABS Turn Speed (deg/s)",
+                ["LayoutOrder"] = 6,
+                ["Savable"] = false,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 800,
+                ["ExtraData"] = { ["MinValue"] = 180, ["MaxValue"] = 2000, ["Step"] = 20 }
+            },
+            ["Fun_KillerABS_Smoothness"] = {
+                ["DisplayDescription"] = "Turn easing smoothness (0 = linear constant speed, 1 = softest smooth curve)",
+                ["DisplayTitle"] = "ABS Turn Smoothness",
+                ["LayoutOrder"] = 7,
+                ["Savable"] = false,
+                ["InstanceType"] = "NumberValue",
+                ["DefaultInstanceValue"] = 0.35,
+                ["ExtraData"] = { ["MinValue"] = 0.0, ["MaxValue"] = 1.0, ["Step"] = 0.05 }
+            },
+            ["Fun_KillerABS_SmoothReturn"] = {
+                ["DisplayDescription"] = "Smoothly rotates back after hold duration instead of snapping",
+                ["DisplayTitle"] = "ABS Smooth Return",
+                ["LayoutOrder"] = 8,
+                ["Savable"] = false,
+                ["InstanceType"] = "BoolValue",
+                ["DefaultInstanceValue"] = true
+            }
+        },
+
         ["Fun_Settings"] = {
             ["TabAttributes"] = {
                 ["DisplayTitle"] = "Fun: Game Emote Settings",
@@ -5737,6 +6426,7 @@ task.spawn(function()
     HandleUIFeatures("Custom_Chase", AddonsPackage["Custom_Chase"])
     HandleUIFeatures("Fun_Wheel", AddonsPackage["Fun_Wheel"])
     HandleUIFeatures("Fun_HDT", AddonsPackage["Fun_HDT"])
+    HandleUIFeatures("Fun_KillerDefense", AddonsPackage["Fun_KillerDefense"])
     HandleUIFeatures("Fun_Settings", AddonsPackage["Fun_Settings"])
     HandleUIFeatures("Fun_Credits", AddonsPackage["Fun_Credits"])
     InitFunSettingsPersistence()
@@ -5951,7 +6641,7 @@ task.spawn(function()
                 local ownerTab = FastGetItemTab(item)
                 local isVisualItem = (ownerTab == "Visual_Generators" or ownerTab == "Visual_Camera" or ownerTab == "Visual_VeeGraffiti" or ownerTab == "Visual_Projectiles")
                 local isMusicItem = (ownerTab == "Custom_LMS" or ownerTab == "Custom_2v3" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase")
-                local isFunItem = (ownerTab == "Fun_Wheel" or ownerTab == "Fun_HDT" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
+                local isFunItem = (ownerTab == "Fun_Wheel" or ownerTab == "Fun_HDT" or ownerTab == "Fun_KillerDefense" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
 
                 if tabKey == "Main" then
                     if isVisualItem or isMusicItem or isFunItem then
@@ -6177,7 +6867,7 @@ task.spawn(function()
         for _, item in ipairs(ContentsScrolling:GetChildren()) do
             if item:IsA("GuiObject") and not item:IsA("UIListLayout") and not item:IsA("UIPadding") and item ~= CanvasAutoSpacer then
                 local ownerTab = FastGetItemTab(item)
-                local isAddonItem = (ownerTab == "Visual_Generators" or ownerTab == "Visual_VeeGraffiti" or ownerTab == "Visual_Projectiles" or ownerTab == "Custom_LMS" or ownerTab == "Custom_2v3" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase" or ownerTab == "Fun_Wheel" or ownerTab == "Fun_HDT" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
+                local isAddonItem = (ownerTab == "Visual_Generators" or ownerTab == "Visual_VeeGraffiti" or ownerTab == "Visual_Projectiles" or ownerTab == "Custom_LMS" or ownerTab == "Custom_2v3" or ownerTab == "Custom_LMS_Visuals" or ownerTab == "Custom_Chase" or ownerTab == "Fun_Wheel" or ownerTab == "Fun_HDT" or ownerTab == "Fun_KillerDefense" or ownerTab == "Fun_Settings" or ownerTab == "Fun_Credits")
                 if not isAddonItem and SavedOriginalVisibility[item] == nil then
                     SavedOriginalVisibility[item] = item.Visible
                 end
